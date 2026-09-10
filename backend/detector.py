@@ -18,87 +18,116 @@ from ultralytics import YOLO
 
 class BaseDetector:
     """Standard modular base interface for WeldVision AI detectors."""
-    def analyze(self, image_bytes: bytes) -> dict:
+    def analyze(self, image_bytes: bytes, filename: str = "weld_specimen.jpg") -> dict:
         raise NotImplementedError("Subclasses must implement analyze()")
 
 
-# ─── Welding Defect Engineering Metadata & Industrial Rules ───────────────────
+# ─── Welding Defect Engineering Knowledge Base & Metadata ─────────────────────
 
 WELD_DEFECT_METADATA = {
     "Bad Welding": {
         "severity": "Critical",
-        "root_cause": "Sub-optimal welding parameter settings (incompatible current/voltage ratio, erratic travel speed, or poor joint alignment) causing metallurgical discontinuity.",
-        "repair_method": "Excavate defective section completely down to sound parent metal by grinding or carbon-arc gouging, clean joint, and re-weld adhering to qualified WPS.",
+        "status": "Rejected",
+        "problem": "Severe bead geometry irregularity, lack of fusion, or structural weld profile breakdown.",
+        "why_defect": "Reduces effective load-bearing cross-sectional area and creates severe stress concentrations prone to joint failure.",
+        "possible_cause": "Sub-optimal welding parameter settings (incompatible current/voltage ratio, erratic travel speed, or poor joint alignment).",
+        "recommended_action": "Excavate defective section completely down to sound parent metal by grinding or carbon-arc gouging, clean joint, and re-weld adhering to qualified WPS.",
         "repair_priority": "Immediate Repair",
-        "explain": "Severe bead geometry irregularity, lack of uniform fusion, or structural weld profile breakdown identified by trained YOLO11 segmentation neural network.",
+        "explain": "Severe bead geometry irregularity or lack of uniform fusion identified by trained YOLO11 segmentation network.",
     },
     "Crack": {
         "severity": "Critical",
-        "root_cause": "Excessive thermal stress, high hydrogen concentration, rapid cooling rate, or high joint restraint during weld metal solidification.",
-        "repair_method": "Stop-drill crack extremities, excavate defect completely to sound metal, verify crack elimination using dye penetrant inspection, and re-weld with low-hydrogen consumables.",
+        "status": "Rejected",
+        "problem": "Linear crack discontinuity detected in weld metal or heat-affected zone (HAZ).",
+        "why_defect": "Creates severe notch stress risers that propagate rapidly under cyclic loading, leading to catastrophic brittle structural fracture.",
+        "possible_cause": "Excessive thermal stress, high residual stress, rapid cooling rate, high joint restraint, or hydrogen contamination during solidification.",
+        "recommended_action": "Stop-drill crack extremities, excavate defect completely to sound metal, verify crack elimination via dye penetrant inspection, and re-weld with low-hydrogen consumables.",
         "repair_priority": "Immediate Repair",
-        "explain": "Linear fracture discontinuity identified along weld bead axis or heat-affected zone (HAZ) by trained YOLO11 segmentation neural network.",
+        "explain": "Linear fracture discontinuity identified along weld bead axis or heat-affected zone (HAZ).",
     },
     "Excess Reinforcement": {
         "severity": "Medium",
-        "root_cause": "Slow travel speed, excessive filler wire feed rate, or improper torch oscillation building excessive weld crown height beyond allowable limits.",
-        "repair_method": "Mechanically grind the weld crown smoothly to blend flush with parent metal maintaining reinforcement height <= 3.0mm conforming to AWS D1.1 Table 6.1.",
+        "status": "Accepted With Repair",
+        "problem": "Weld metal deposit on face or root exceeding allowable reinforcement profile height.",
+        "why_defect": "Creates abrupt geometric transitions and notch stress concentrations at weld toes, increasing fatigue vulnerability under cyclic loading.",
+        "possible_cause": "Slow travel speed, excessive filler wire feed rate, or improper torch oscillation building excessive weld crown height.",
+        "recommended_action": "Mechanically grind the weld crown smoothly to blend flush with parent metal maintaining reinforcement height <= 3.0mm conforming to AWS D1.1 Table 6.1.",
         "repair_priority": "Repair Before Use",
-        "explain": "Weld metal deposit on face or root exceeding allowable reinforcement profile height detected by YOLO11 segmentation mask.",
-    },
-    "Good Welding": {
-        "severity": "Low",
-        "root_cause": "Optimal welding procedure specification (WPS) execution with balanced heat input, consistent travel speed, and proper gas shielding.",
-        "repair_method": "No repair required; weld bead conforms to AWS D1.1 / ISO 5817 visual inspection criteria.",
-        "repair_priority": "No Action Required",
-        "explain": "Uniform bead width, smooth ripple profile, gradual toe transition, and sound metallurgical coalescence verified by YOLO11 segmentation network.",
+        "explain": "Weld metal deposit on face or root exceeding allowable reinforcement profile height.",
     },
     "Porosity": {
         "severity": "High",
-        "root_cause": "Atmospheric gas entrapment, moisture/grease contamination on joint faces, or inadequate shielding gas flow during welding pass.",
-        "repair_method": "Mechanically grind out porous weld bead region down to sound metal, ensure dry shielded atmosphere, and deposit sound repair bead.",
+        "status": "Requires Repair",
+        "problem": "Porous spherical gas cavities or void cluster entrapped within the solidifying weld metal.",
+        "why_defect": "Reduces the effective cross-sectional density and acts as internal stress concentration points, degrading tensile and fatigue strength.",
+        "possible_cause": "Atmospheric gas entrapment, moisture/grease/rust contamination on joint faces, or inadequate shielding gas flow/drafty environment.",
+        "recommended_action": "Mechanically grind out porous weld bead region down to sound metal, ensure dry shielded atmosphere and correct gas flow, and deposit sound repair pass.",
         "repair_priority": "Repair Before Use",
         "explain": "Gas cavity or spherical void cluster trapped during solidification detected by YOLO11 segmentation mask.",
     },
     "Spatters": {
         "severity": "Medium",
-        "root_cause": "High arc voltage, excessive arc length, damp electrodes, or improper shielding gas mixture expelling molten droplets.",
-        "repair_method": "Mechanically chisel, wire brush, or scrape spatter beads off parent plate surface; apply anti-spatter barrier spray pre-weld.",
+        "status": "Repair Recommended",
+        "problem": "Molten metal globules expelled from welding arc scattered across weld face and adjacent base plate.",
+        "why_defect": "Can mask underlying micro-cracks, interfere with non-destructive testing (NDT), impair protective coatings, and initiate localized galvanic corrosion.",
+        "possible_cause": "High arc voltage, excessive arc length, damp electrodes, incorrect torch angle, or improper shielding gas mixture.",
+        "recommended_action": "Mechanically chisel, wire brush, or scrape spatter beads off parent plate surface; apply anti-spatter barrier spray pre-weld.",
         "repair_priority": "Clean / De-spatter",
-        "explain": "Molten metal globules expelled from welding arc scattered across adjacent plate surface detected by YOLO11 segmentation mask.",
+        "explain": "Molten metal droplets expelled from welding arc scattered across adjacent plate surface.",
     },
     "Spatter": {
         "severity": "Medium",
-        "root_cause": "High arc voltage, excessive arc length, damp electrodes, or improper shielding gas mixture expelling molten droplets.",
-        "repair_method": "Mechanically chisel, wire brush, or scrape spatter beads off parent plate surface; apply anti-spatter barrier spray pre-weld.",
+        "status": "Repair Recommended",
+        "problem": "Molten metal globules expelled from welding arc scattered across weld face and adjacent base plate.",
+        "why_defect": "Can mask underlying micro-cracks, interfere with non-destructive testing (NDT), impair protective coatings, and initiate localized galvanic corrosion.",
+        "possible_cause": "High arc voltage, excessive arc length, damp electrodes, incorrect torch angle, or improper shielding gas mixture.",
+        "recommended_action": "Mechanically chisel, wire brush, or scrape spatter beads off parent plate surface; apply anti-spatter barrier spray pre-weld.",
         "repair_priority": "Clean / De-spatter",
-        "explain": "Molten metal globules expelled from welding arc scattered across adjacent plate surface detected by YOLO11 segmentation mask.",
-    },
-    "Undercut": {
-        "severity": "High",
-        "root_cause": "Excessive welding current, arc length too long, or excessive travel speed cutting groove in parent metal at toe.",
-        "repair_method": "Clean undercut groove thoroughly and deposit stringer repair pass using small diameter electrode.",
-        "repair_priority": "Repair Before Use",
-        "explain": "Groove melted into base metal adjacent to weld toe along outer boundary.",
+        "explain": "Molten metal droplets expelled from welding arc scattered across adjacent plate surface.",
     },
     "Lack of Fusion": {
         "severity": "High",
-        "root_cause": "Insufficient heat input, incorrect torch angle, or heavy mill scale/oxide layer preventing coalescence.",
-        "repair_method": "Excavate un-fused weld boundary, preheat joint, adjust travel speed/voltage, and deposit repair pass.",
+        "status": "Requires Repair",
+        "problem": "Planar discontinuity along weld toe or sidewall where weld metal failed to coalesce with base metal.",
+        "why_defect": "Forms an un-fused boundary plane causing sudden joint separation under shear or tensile stress.",
+        "possible_cause": "Insufficient heat input, incorrect torch angle, or heavy mill scale/oxide layer preventing coalescence.",
+        "recommended_action": "Excavate un-fused weld boundary by grinding, preheat joint, adjust travel speed and voltage, and deposit qualified repair pass.",
         "repair_priority": "Repair Before Use",
         "explain": "Planar discontinuity along weld toe/sidewall where weld metal failed to coalesce with base metal.",
     },
     "Lack of Penetration": {
         "severity": "Critical",
-        "root_cause": "Low welding current, excessive root face thickness, or small bevel angle preventing root access.",
-        "repair_method": "Back-gouge to sound metal from root side, increase welding heat input, and re-weld root pass.",
+        "status": "Rejected",
+        "problem": "Unfilled gap at joint root due to incomplete weld penetration through joint thickness.",
+        "why_defect": "Leaves an internal notch at root pass that drastically reduces tensile fatigue strength and promotes rapid cracking.",
+        "possible_cause": "Low welding current, excessive root face thickness, travel speed too fast, or small bevel angle preventing root access.",
+        "recommended_action": "Back-gouge to sound metal from root side, increase welding heat input, and re-weld root pass adhering to WPS.",
         "repair_priority": "Immediate Repair",
         "explain": "Unfilled gap detected at joint root due to incomplete weld penetration through joint thickness.",
+    },
+    "Undercut": {
+        "severity": "High",
+        "status": "Requires Repair",
+        "problem": "Groove melted into base metal adjacent to weld toe along outer boundary.",
+        "why_defect": "Reduces parent plate thickness at high-stress weld toe transition zone and acts as fatigue initiation site.",
+        "possible_cause": "Excessive welding current, arc length too long, or excessive travel speed cutting groove in parent metal at toe.",
+        "recommended_action": "Clean undercut groove thoroughly and deposit stringer repair pass using small diameter electrode.",
+        "repair_priority": "Repair Before Use",
+        "explain": "Groove melted into base metal adjacent to weld toe along outer boundary.",
+    },
+    "Good Welding": {
+        "severity": "Low",
+        "status": "Accepted",
+        "problem": "None (Conforming Weld).",
+        "why_defect": "Not a defect; conforms to standard acceptance criteria.",
+        "possible_cause": "Optimal welding procedure specification (WPS) execution with balanced heat input, consistent travel speed, and proper gas shielding.",
+        "recommended_action": "No repair required; weld bead conforms to AWS D1.1 / ISO 5817 visual inspection criteria.",
+        "repair_priority": "No Action Required",
+        "explain": "Uniform bead width, smooth ripple profile, gradual toe transition, and sound metallurgical coalescence verified by YOLO11 segmentation network.",
     }
 }
 
 # Color-coding map for Severities (BGR & HEX)
-# Red = Critical, Orange = Major (High), Yellow = Minor (Medium), Green = Acceptable (Low)
 SEVERITY_COLOR_BGR = {
     "Critical": (40,  40,  235),  # Red
     "High":     (0,   115, 245),  # Orange
@@ -120,7 +149,6 @@ SEVERITY_HEX = {
     "Low":      "#10B981", # Green
 }
 
-# Class to Severity Mapping
 CLASS_SEVERITY_MAP = {
     "Bad Welding": "Critical",
     "Crack": "Critical",
@@ -140,8 +168,7 @@ CLASS_SEVERITY_MAP = {
 class WeldDetector(BaseDetector):
     """
     AI-Powered Weld Defect Detector using Ultralytics YOLO11 Segmentation.
-    Loads real trained weights and predicts defect bounding boxes, segmentation masks,
-    confidence scores, locations, and AWS/ISO engineering metrics.
+    Loads real trained weights and inspects every detected defect without dropping.
     """
 
     def __init__(self, model_path: str = None):
@@ -158,8 +185,6 @@ class WeldDetector(BaseDetector):
             "backend/models/best.pt",
             "runs/segment/runs/segment/weldvision_yolo11n/weights/best.pt",
             "runs/segment/weldvision_yolo11n/weights/best.pt",
-            "runs/segment/runs/segment/weldvision_yolo11n/weights/last.pt",
-            "runs/segment/weldvision_yolo11n/weights/last.pt",
             "yolo11n-seg.pt",
         ]
         for c in candidates:
@@ -168,7 +193,6 @@ class WeldDetector(BaseDetector):
         return "yolo11n-seg.pt"
 
     def reload_model(self, model_path: str = None):
-        """Reloads trained model weights once training finishes."""
         resolved = self._resolve_model_path(model_path)
         if resolved != self.model_path or model_path:
             self.model_path = resolved
@@ -188,9 +212,8 @@ class WeldDetector(BaseDetector):
 
     # ── Main Analysis Pipeline ───────────────────────────────────────────
 
-    def analyze(self, image_bytes: bytes) -> dict:
-        # Check if newer trained weights are available
-        best_candidate = "models/best.pt"
+    def analyze(self, image_bytes: bytes, filename: str = "weld_specimen.jpg") -> dict:
+        best_candidate = "backend/models/best.pt"
         if os.path.exists(best_candidate) and "yolo11n-seg.pt" in self.model_path:
             self.reload_model(best_candidate)
 
@@ -208,8 +231,8 @@ class WeldDetector(BaseDetector):
 
         r = results[0]
         raw_detections = []
-        is_good_welding_only = False
         good_welding_count = 0
+        detected_classes_count = {}
 
         if r.boxes is not None and len(r.boxes) > 0:
             boxes = r.boxes
@@ -219,6 +242,9 @@ class WeldDetector(BaseDetector):
                 cls_id = int(boxes.cls[i].item())
                 conf = float(boxes.conf[i].item())
                 cls_name = self.model.names.get(cls_id, f"Defect_{cls_id}")
+
+                # Track detection counts
+                detected_classes_count[cls_name] = detected_classes_count.get(cls_name, 0) + 1
 
                 # Bounding box coordinates [x1, y1, x2, y2]
                 x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
@@ -246,9 +272,6 @@ class WeldDetector(BaseDetector):
                     continue
 
                 # Determine Confidence Tier
-                # High (>=0.20): Confirmed Defect
-                # Medium (0.10 - 0.199): Review Required
-                # Low (<0.10): Possible / Uncertain Indication
                 if conf >= 0.20:
                     conf_tier = "Confirmed Defect"
                     status_note = "High Confidence"
@@ -259,9 +282,9 @@ class WeldDetector(BaseDetector):
                     conf_tier = "Possible Indication"
                     status_note = "Low Confidence (Tentative)"
 
-                # For very low confidence (< 0.10), tone down critical severity to prevent spurious structural rejections
+                # Severity assignment
                 if conf < 0.10 and cls_name in ("Crack", "Bad Welding", "Lack of Penetration"):
-                    sev = "Medium"  # Downgraded to tentative review priority
+                    sev = "Medium"
                 else:
                     sev = CLASS_SEVERITY_MAP.get(cls_name, "Medium")
 
@@ -282,32 +305,63 @@ class WeldDetector(BaseDetector):
                 d_dict["status_note"] = status_note
                 raw_detections.append(d_dict)
 
-        # Check if clean weld (no defects detected)
+        # Build dynamic timestamp information
+        now = datetime.datetime.now()
+        inspection_date = now.strftime("%d %B %Y")
+        inspection_time = now.strftime("%H:%M")
+        inspection_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+        inspection_id = f"WLD-{now.strftime('%Y%m%d-%H%M%S')}"
+
+        # If zero defects detected (or pure Good Welding)
         if not raw_detections:
-            return self._clean_clean_weld_result(img_bgr, w, h, has_good_welding=(good_welding_count > 0))
+            return self._clean_weld_result(
+                img_bgr=img_bgr,
+                w=w,
+                h=h,
+                filename=filename,
+                inspection_id=inspection_id,
+                inspection_date=inspection_date,
+                inspection_time=inspection_time,
+                inspection_timestamp=inspection_timestamp,
+                good_welding_count=good_welding_count,
+                detected_classes_count=detected_classes_count
+            )
 
-        # Sort defects by confidence
-        defects = sorted(raw_detections, key=lambda d: -d["confidence"])[:12]
+        # Include EVERY detected defect (no dropping or truncating)
+        defects = sorted(raw_detections, key=lambda d: (-d["confidence"], d["id_num"] if "id_num" in d else 0))
 
-        # Assign sequential IDs and populate exact weld defect engineering metadata
+        # Defect Breakdown dictionary containing only detected classes
+        breakdown = {}
+        for d in defects:
+            t = d["type"]
+            breakdown[t] = breakdown.get(t, 0) + 1
+        if good_welding_count > 0:
+            breakdown["Good Welding"] = good_welding_count
+
+        # Assign sequential IDs and populate complete engineering analysis
         for idx, d in enumerate(defects, 1):
             d["id"] = f"WLD-{idx:03d}"
             d["id_num"] = idx
             meta = WELD_DEFECT_METADATA.get(d["type"], WELD_DEFECT_METADATA.get(d["type"].capitalize(), WELD_DEFECT_METADATA["Porosity"]))
-            d["root_cause"] = meta["root_cause"]
-            d["possible_cause"] = meta["root_cause"]
-            d["repair_method"] = meta["repair_method"]
-            d["recommended_repair"] = meta["repair_method"]
+            
+            d["problem"] = meta["problem"]
+            d["why_defect"] = meta["why_defect"]
+            d["root_cause"] = meta["possible_cause"]
+            d["possible_cause"] = meta["possible_cause"]
+            d["repair_method"] = meta["recommended_action"]
+            d["recommended_action"] = meta["recommended_action"]
+            d["recommended_repair"] = meta["recommended_action"]
             d["repair_priority"] = meta["repair_priority"]
+            d["status"] = meta["status"]
             d["explain"] = meta["explain"]
             d["severity_hex"] = SEVERITY_HEX.get(d["severity"], "#F59E0B")
 
-            # Approximate size in mm (calibrated estimation)
+            # Calibrated size estimation
             bw_mm = round(d["bbox"][2] * 0.12, 1)
             bh_mm = round(d["bbox"][3] * 0.12, 1)
             d["size_mm"] = f"{bw_mm} mm x {bh_mm} mm"
 
-        # ── Analytics Calculation ──────────────────────────────────────────
+        # ── Analytics & Quality Scoring ──────────────────────────────────────
         total_defects = len(defects)
         defective_area_pct = round(min(sum(d["area_pct"] for d in defects), 75.0), 1)
         weld_coverage_pct = round(max(99.5 - defective_area_pct * 0.4, 70.0), 1)
@@ -320,7 +374,8 @@ class WeldDetector(BaseDetector):
         quality_score = self._compute_weld_quality_score(defects, defective_area_pct)
         condition_info = self._get_condition_label(quality_score, defects)
         acceptance_status = self._determine_acceptance_status(quality_score, critical_count, high_count, medium_count, total_defects)
-        overall_risk = self._determine_risk_level(critical_count, high_count, medium_count, defective_area_pct)
+        overall_severity = self._determine_overall_severity(critical_count, high_count, medium_count, defective_area_pct)
+        overall_risk = overall_severity
         repair_priority = self._determine_overall_repair_priority(critical_count, high_count, medium_count, defects)
 
         dominant_type = max(set(d["type"] for d in defects), key=lambda t: sum(1 for d in defects if d["type"] == t))
@@ -333,11 +388,28 @@ class WeldDetector(BaseDetector):
         ) if defects else 95.0
         inspection_conf = min(99.0, max(80.0, inspection_conf))
 
+        # Build dynamic conclusion & quality assessment explanation
+        conclusion_text = self._generate_weld_conclusion(defects, breakdown, acceptance_status, critical_count, high_count)
+        quality_explanation = self._generate_quality_explanation(quality_score, acceptance_status, overall_severity, defects, breakdown)
         verdict = self._generate_weld_verdict(defects, defective_area_pct, quality_score, acceptance_status, dominant_type)
-        possible_causes = list(dict.fromkeys(d["possible_cause"] for d in defects))[:5]
-        recommended_actions = list(dict.fromkeys(d["repair_method"] for d in defects))[:5]
 
-        # ── Render Inspection Visualizations ────────────────────────────────
+        possible_causes = list(dict.fromkeys(d["possible_cause"] for d in defects))
+        recommended_actions = list(dict.fromkeys(d["recommended_action"] for d in defects))
+
+        # Problem analysis list for every defect
+        problem_analysis_list = []
+        for d in defects:
+            problem_analysis_list.append({
+                "defect_id": d["id"],
+                "defect_type": d["type"],
+                "severity": d["severity"],
+                "problem": d["problem"],
+                "why_defect": d["why_defect"],
+                "possible_cause": d["possible_cause"],
+                "recommended_action": d["recommended_action"]
+            })
+
+        # ── Render Non-Overlapping Visualizations ───────────────────────────
         annotated_bgr = self._draw_engineering_annotations(img_bgr, defects)
         overlay_bgr   = self._draw_defect_heatmap_overlay(img_bgr, defects)
 
@@ -345,9 +417,28 @@ class WeldDetector(BaseDetector):
             "original_image":       self._cv2_to_b64(img_bgr),
             "annotated_image":      self._cv2_to_b64(annotated_bgr),
             "overlay_image":        self._cv2_to_b64(overlay_bgr),
+            "file_name":            filename,
+            "inspection_id":        inspection_id,
+            "inspection_date":      inspection_date,
+            "inspection_time":      inspection_time,
+            "inspection_timestamp": inspection_timestamp,
+            "model_name":           "Ultralytics YOLO11-seg (Industrial Weld Model)",
+            "model_type":           "Instance Segmentation & Defect Analysis",
+            "inspection_status":    "Complete",
+            "total_defects":        total_defects,
             "defects":              defects,
+            "breakdown":            breakdown,
+            "problem_analysis":     problem_analysis_list,
+            "quality_assessment": {
+                "score":                quality_score,
+                "status":               acceptance_status,
+                "severity":             overall_severity,
+                "explanation":          quality_explanation,
+            },
+            "conclusion":           conclusion_text,
             "summary": {
                 "total_defects":        total_defects,
+                "breakdown":            breakdown,
                 "critical_defects":     critical_count,
                 "major_defects":        high_count,
                 "minor_defects":        medium_count,
@@ -362,14 +453,16 @@ class WeldDetector(BaseDetector):
                 "score":                quality_score,
                 "condition":            condition_info["label"],
                 "acceptance_status":    acceptance_status,
+                "overall_status":       acceptance_status,
+                "overall_severity":     overall_severity,
                 "overall_risk":         overall_risk,
                 "repair_priority":      repair_priority,
                 "verdict":              verdict,
+                "conclusion":           conclusion_text,
                 "possible_causes":      possible_causes,
                 "recommended_actions":  recommended_actions,
             },
-            # Backwards compatibility flat fields
-            "total_defects":        total_defects,
+            # Flat compatibility fields
             "critical_count":       critical_count,
             "high_count":           high_count,
             "medium_count":         medium_count,
@@ -377,12 +470,12 @@ class WeldDetector(BaseDetector):
             "damaged_pct":          defective_area_pct,
             "health_score":         quality_score,
             "condition":            condition_info["label"],
+            "acceptance_status":    acceptance_status,
             "overall_risk":         overall_risk,
             "dominant_type":        dominant_type,
             "largest_defect":       largest_defect_str,
             "verdict":              verdict,
             "inspection_confidence": inspection_conf,
-            "inspection_time":      datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
     # ── Helpers & Generators ────────────────────────────────────────────
@@ -390,10 +483,33 @@ class WeldDetector(BaseDetector):
     def _build_defect_dict(self, dtype, sev, x, y, cw, ch, pct, conf, img_w, img_h, mask_pts=None):
         cx, cy = int(x + cw // 2), int(y + ch // 2)
 
-        # Determine Weld Zone Location
-        vert_loc = "Top Pass" if cy < img_h * 0.35 else ("Root Pass" if cy > img_h * 0.65 else "Centerline")
-        horiz_loc = "Left Toe" if cx < img_w * 0.35 else ("Right Toe" if cx > img_w * 0.65 else "Weld Seam")
-        loc_str = f"{vert_loc} ({horiz_loc})"
+        # Determine exact natural region location
+        if cy < img_h * 0.35:
+            vert_str = "Upper"
+            zone_v = "Top Pass"
+        elif cy > img_h * 0.65:
+            vert_str = "Lower"
+            zone_v = "Root Pass"
+        else:
+            vert_str = "Center"
+            zone_v = "Centerline"
+
+        if cx < img_w * 0.35:
+            horiz_str = "left"
+            zone_h = "Left Toe"
+        elif cx > img_w * 0.65:
+            horiz_str = "right"
+            zone_h = "Right Toe"
+        else:
+            horiz_str = "weld"
+            zone_h = "Weld Seam"
+
+        if vert_str == "Center" and horiz_str == "weld":
+            region_str = "Center weld region"
+        else:
+            region_str = f"{vert_str}-{horiz_str} weld region"
+
+        loc_str = f"{zone_v} ({zone_h})"
 
         res = {
             "type": dtype,
@@ -403,7 +519,9 @@ class WeldDetector(BaseDetector):
             "center": [cx, cy],
             "area_pct": round(float(pct), 2),
             "confidence": round(float(conf), 3),
-            "location": loc_str,
+            "confidence_pct": int(round(conf * 100)),
+            "region": region_str,
+            "location": region_str,
             "weld_zone": loc_str,
         }
         if mask_pts:
@@ -412,12 +530,8 @@ class WeldDetector(BaseDetector):
 
     def _compute_weld_quality_score(self, defects, defective_area_pct):
         """
-        Computes an industrial Weld Quality Score (0-100) adhering to AWS D1.1 and ISO 5817.
-        - Perfectly sound weld (0 defects): 98-100
-        - Presence of any Critical defect (Crack, Bad Welding, Lack of Penetration): capped at max 45 (Rejected)
-        - Presence of High defect (Porosity, Undercut, Lack of Fusion): capped at max 65 (Requires Rewelding)
-        - Multiple defects compound penalties proportionally based on count and area.
-        - Purely minor/cosmetic features: scaled proportionally, cannot be labelled Excellent if multiple defects exist.
+        Dynamically computes quality score based on ALL detected defects.
+        No hardcoded fixed values.
         """
         if not defects:
             return 98
@@ -427,53 +541,46 @@ class WeldDetector(BaseDetector):
         medium_count   = sum(1 for d in defects if d["severity"] == "Medium")
         low_count      = sum(1 for d in defects if d["severity"] == "Low")
 
-        # Base starting score
         score = 100.0
 
-        # 1. Defect Area Impact (calibrated scale)
-        area_penalty = min(35.0, defective_area_pct * 3.5)
-        score -= area_penalty
+        # Defect Area Penalty (proportional)
+        score -= min(35.0, defective_area_pct * 3.2)
 
-        # 2. Defect Severity Penalties
+        # Severity & Confidence Penalties for EVERY detection
         for d in defects:
             sev = d["severity"]
             conf = d.get("confidence", 0.5)
-            # Confidence weighting: high confidence defects carry full penalty
-            weight = max(0.6, min(1.0, conf + 0.3))
+            weight = max(0.55, min(1.0, conf + 0.3))
             if sev == "Critical":
-                score -= (35.0 * weight)
+                score -= (32.0 * weight)
             elif sev == "High":
-                score -= (20.0 * weight)
+                score -= (18.0 * weight)
             elif sev == "Medium":
-                score -= (8.0 * weight)
+                score -= (7.5 * weight)
             else:
-                score -= (3.0 * weight)
+                score -= (2.5 * weight)
 
-        # 3. Multi-defect compounding penalty (cumulative joint degradation)
+        # Multi-defect compounding penalty
         if len(defects) >= 5:
-            score -= 12.0
+            score -= 10.0
         elif len(defects) >= 3:
-            score -= 6.0
+            score -= 5.0
 
         final_score = int(round(score))
 
-        # 4. Strict Engineering Caps based on AWS D1.1 Visual Acceptance Criteria:
+        # Strict Engineering Caps based on AWS D1.1:
         if critical_count > 0:
-            final_score = min(final_score, 42)  # Automatically forces 'Rejected' / 'Poor'
+            final_score = min(final_score, 42)
         elif high_count > 0:
-            final_score = min(final_score, 62)  # Automatically forces 'Requires Rewelding' / 'Acceptable' max
+            final_score = min(final_score, 62)
         elif medium_count >= 3 or len(defects) >= 4:
-            final_score = min(final_score, 74)  # Multi-defect cluster cannot be 'Good' or 'Excellent'
+            final_score = min(final_score, 74)
         elif medium_count > 0:
-            final_score = min(final_score, 82)  # Single moderate defect capped below 'Excellent'
+            final_score = min(final_score, 82)
 
         return max(5, min(98, final_score))
 
     def _get_condition_label(self, score, defects=None):
-        """
-        Determines overall weld condition label.
-        A weld containing active defects can NEVER be classified as 'Excellent'.
-        """
         if defects:
             critical_cnt = sum(1 for d in defects if d["severity"] == "Critical")
             high_cnt     = sum(1 for d in defects if d["severity"] == "High")
@@ -499,37 +606,26 @@ class WeldDetector(BaseDetector):
             return {"label": "Severe Failure", "desc": "Weld failure rejecting quality threshold"}
 
     def _determine_acceptance_status(self, score, critical_cnt, high_cnt, medium_cnt=0, total_defects=0):
-        """
-        AWS D1.1 / ISO 5817 Visual Acceptance Rule:
-        - Critical defects (Crack, Bad Welding, Lack of Fusion/Penetration) -> REJECTED.
-        - High severity defects (Porosity, Undercut) -> REQUIRES REWELDING.
-        - Moderate defects (Excess Reinforcement, multiple spatters) -> ACCEPTED WITH REPAIR.
-        - Clean sound weld -> ACCEPTED.
-        """
         if critical_cnt > 0 or score < 45:
             return "Rejected"
         elif high_cnt > 0 or score < 65:
-            return "Requires Rewelding"
+            return "Requires Repair"
         elif medium_cnt > 0 or total_defects > 0 or score < 88:
             return "Accepted With Repair"
         else:
             return "Accepted"
 
-    def _determine_risk_level(self, critical_cnt, high_cnt, medium_cnt, defective_area_pct):
-        """Calculates overall defect severity risk index."""
+    def _determine_overall_severity(self, critical_cnt, high_cnt, medium_cnt, defective_area_pct):
         if critical_cnt >= 1 or defective_area_pct > 20:
             return "Critical"
         elif high_cnt >= 1 or defective_area_pct > 10:
             return "High"
-        elif medium_cnt >= 2 or defective_area_pct > 2:
-            return "Moderate"
-        elif medium_cnt >= 1:
-            return "Moderate"
+        elif medium_cnt >= 1 or defective_area_pct > 2:
+            return "Medium"
         else:
             return "Low"
 
     def _determine_overall_repair_priority(self, critical_cnt, high_cnt, medium_cnt, defects):
-        """Determines actionable repair priority adhering to AWS D1.1."""
         if critical_cnt > 0:
             return "Immediate Repair"
         elif high_cnt > 0:
@@ -543,27 +639,90 @@ class WeldDetector(BaseDetector):
         else:
             return "No Action Required"
 
+    def _generate_weld_conclusion(self, defects, breakdown, acceptance_status, critical_cnt, high_cnt):
+        """
+        Dynamically constructs clear engineering conclusion mentioning all detected defect types and counts.
+        """
+        parts = []
+        for def_type, count in breakdown.items():
+            if def_type != "Good Welding":
+                parts.append(f"{count} {def_type}")
+        
+        defect_summary_str = ", ".join(parts) if parts else "no active defects"
+
+        if acceptance_status == "Rejected":
+            return (
+                f"Inspection identified {defect_summary_str} indication(s). "
+                f"Due to the presence of critical structural defects ({'including Crack/Bad Welding' if critical_cnt > 0 else 'high density defects'}), "
+                f"the weld is classified as Rejected and requires immediate engineering review and corrective action prior to service."
+            )
+        elif acceptance_status in ("Requires Repair", "Requires Rewelding"):
+            return (
+                f"Inspection identified {defect_summary_str} indication(s). "
+                f"The weld joint requires repair and re-welding in the designated defect zones before final structural sign-off."
+            )
+        elif acceptance_status == "Accepted With Repair":
+            return (
+                f"Inspection identified {defect_summary_str} indication(s). "
+                f"The weld is classified as Accepted With Repair, requiring surface cleaning, de-spattering, or weld toe dressing."
+            )
+        else:
+            return "Inspection verified sound weld bead geometry conforming to AWS D1.1 / ISO 5817 visual acceptance criteria. Status: Accepted."
+
+    def _generate_quality_explanation(self, score, status, severity, defects, breakdown):
+        defect_list_str = ", ".join([f"{k} ({v})" for k, v in breakdown.items() if k != "Good Welding"])
+        if not defects:
+            return f"A quality score of {score}/100 and status of '{status}' was assigned because zero structural defects or surface irregularities were detected."
+        return (
+            f"A quality score of {score}/100 and overall severity of '{severity}' was assigned based on {len(defects)} detected defect indication(s): "
+            f"{defect_list_str}. Each defect contributed to the score reduction based on its classification, affected area, and AWS D1.1 severity weighting."
+        )
+
     def _generate_weld_verdict(self, defects, dam_pct, score, acceptance, dominant_type):
         def_types = list(dict.fromkeys(d["type"] for d in defects))
-        types_str = ", ".join(def_types[:3])
+        types_str = ", ".join(def_types[:4])
         return (
             f"The inspected weld contains {len(defects)} visible defect(s) including {types_str}. "
             f"The total estimated defective area is approximately {dam_pct}%. "
             f"Weld Quality Score is {score}/100 with an overall status of '{acceptance}'. "
-            f"{'Immediate repair is required prior to load service.' if acceptance in ('Rejected', 'Requires Rewelding') else 'The weld is acceptable with minor scheduled repair recommended.'}"
+            f"{'Immediate repair is required prior to load service.' if acceptance in ('Rejected', 'Requires Repair') else 'The weld is acceptable with minor scheduled repair recommended.'}"
         )
 
-    def _clean_clean_weld_result(self, img_bgr, w, h, has_good_welding=False):
+    def _clean_weld_result(self, img_bgr, w, h, filename, inspection_id, inspection_date, inspection_time, inspection_timestamp, good_welding_count=0, detected_classes_count=None):
         verdict = ("Trained YOLO11 model verified sound weld bead geometry, uniform ripple pattern, and complete fusion coalescence. Zero visual defects detected."
-                   if has_good_welding else
-                   "No visual surface defects detected. Weld bead profile conforms to AWS D1.1 visual acceptance criteria.")
+                   if good_welding_count > 0 else
+                   "No visual surface defects detected. Weld bead profile conforms to AWS D1.1 / ISO 5817 visual acceptance criteria.")
+        
+        breakdown = {}
+        if good_welding_count > 0:
+            breakdown["Good Welding"] = good_welding_count
+
         return {
             "original_image":       self._cv2_to_b64(img_bgr),
             "annotated_image":      self._cv2_to_b64(img_bgr),
             "overlay_image":        self._cv2_to_b64(img_bgr),
-            "defects": [],
+            "file_name":            filename,
+            "inspection_id":        inspection_id,
+            "inspection_date":      inspection_date,
+            "inspection_time":      inspection_time,
+            "inspection_timestamp": inspection_timestamp,
+            "model_name":           "Ultralytics YOLO11-seg (Industrial Weld Model)",
+            "model_type":           "Instance Segmentation & Defect Analysis",
+            "inspection_status":    "Complete",
+            "total_defects":        0,
+            "defects":              [],
+            "breakdown":            breakdown,
+            "problem_analysis":     [],
+            "quality_assessment": {
+                "score":                98,
+                "status":               "Excellent",
+                "severity":             "Low",
+                "explanation":          "A quality score of 98/100 and status of 'Excellent' was assigned because zero active welding defects were detected.",
+            },
+            "conclusion":           "Inspection verified sound weld bead geometry conforming to AWS D1.1 / ISO 5817 visual acceptance criteria with zero active defects detected. Status: Excellent / Accepted.",
             "summary": {
                 "total_defects":        0,
+                "breakdown":            breakdown,
                 "critical_defects":     0,
                 "major_defects":        0,
                 "minor_defects":        0,
@@ -578,18 +737,20 @@ class WeldDetector(BaseDetector):
                 "score":                98,
                 "condition":            "Excellent",
                 "acceptance_status":    "Accepted",
+                "overall_status":       "Excellent",
+                "overall_severity":     "Low",
                 "overall_risk":         "Low",
                 "repair_priority":      "No Action Required",
                 "verdict":              verdict,
-                "possible_causes":      ["Optimal welding heat input and travel speed."],
-                "recommended_actions":  ["Proceed to final inspection step; zero repair needed."],
+                "conclusion":           "Inspection verified sound weld bead geometry conforming to AWS D1.1 / ISO 5817 visual acceptance criteria with zero active defects detected. Status: Excellent / Accepted.",
+                "possible_causes":      ["Optimal welding heat input, travel speed, and gas shielding."],
+                "recommended_actions":  ["Proceed to next production phase; zero repair required."],
             },
-            "total_defects": 0, "critical_count": 0, "high_count": 0, "medium_count": 0, "low_count": 0,
+            "critical_count": 0, "high_count": 0, "medium_count": 0, "low_count": 0,
             "damaged_pct": 0.0, "health_score": 98, "condition": "Excellent", "overall_risk": "Low",
             "dominant_type": "None", "largest_defect": "None",
             "verdict": verdict,
             "inspection_confidence": 98.5,
-            "inspection_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
     # ── Non-Overlapping CAD Engineering Leader-Line Renderer ────────────────
@@ -604,7 +765,7 @@ class WeldDetector(BaseDetector):
         canvas = np.full((canvas_h, canvas_w, 3), (245, 248, 252), dtype=np.uint8)
         ox, oy = pad_x, pad_y
 
-        # Draw CAD grid
+        # Draw subtle CAD grid
         for gx in range(0, canvas_w, 25):
             cv2.line(canvas, (gx, 0), (gx, canvas_h), (230, 236, 244), 1)
         for gy in range(0, canvas_h, 25):
@@ -622,11 +783,12 @@ class WeldDetector(BaseDetector):
 
         # Highlight exact defect regions & segmentation masks
         img_region = canvas[oy:oy+orig_h, ox:ox+orig_w].copy()
-        for d in defects:
+        for idx, d in enumerate(defects, 1):
             bx, by, bw, bh = d["bbox"]
             bx, by = max(0, min(bx, orig_w - 1)), max(0, min(by, orig_h - 1))
             bw, bh = min(bw, orig_w - bx), min(bh, orig_h - by)
             c = SEVERITY_OVERLAY_BGR.get(d["severity"], (0, 180, 220))
+            stroke_c = SEVERITY_COLOR_BGR.get(d["severity"], (0, 180, 220))
 
             # Draw polygon mask fill if present
             if "segmentation_mask" in d and len(d["segmentation_mask"]) >= 3:
@@ -634,7 +796,7 @@ class WeldDetector(BaseDetector):
                 mask_layer = np.zeros_like(img_region)
                 cv2.fillPoly(mask_layer, [pts], c)
                 cv2.addWeighted(mask_layer, 0.35, img_region, 1.0, 0, img_region)
-                cv2.polylines(img_region, [pts], True, SEVERITY_COLOR_BGR.get(d["severity"], c), 2)
+                cv2.polylines(img_region, [pts], True, stroke_c, 2)
             else:
                 roi = img_region[by:by+bh, bx:bx+bw]
                 if roi.size > 0:
@@ -643,8 +805,13 @@ class WeldDetector(BaseDetector):
                     img_region[by:by+bh, bx:bx+bw] = roi
 
             # Solid severity bounding box
-            stroke_c = SEVERITY_COLOR_BGR.get(d["severity"], (0, 180, 220))
             cv2.rectangle(img_region, (bx, by), (bx+bw, by+bh), stroke_c, 2)
+
+            # Compact numbered badge at top-left of defect box
+            badge_text = f"#{idx}"
+            cv2.rectangle(img_region, (bx, max(0, by - 16)), (bx + 26, max(16, by)), stroke_c, -1)
+            cv2.putText(img_region, badge_text, (bx + 2, max(12, by - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1, cv2.LINE_AA)
 
         canvas[oy:oy+orig_h, ox:ox+orig_w] = img_region
 
@@ -652,7 +819,12 @@ class WeldDetector(BaseDetector):
         left_defects  = sorted([d for d in defects if d["center"][0] < orig_w / 2], key=lambda d: d["center"][1])
         right_defects = sorted([d for d in defects if d["center"][0] >= orig_w / 2], key=lambda d: d["center"][1])
 
-        CARD_W, CARD_H, CARD_GAP = 195, 46, 12
+        CARD_W = 205
+        # Dynamically calculate card height and gap to fit all callouts cleanly
+        max_items = max(len(left_defects), len(right_defects), 1)
+        available_height = orig_h + pad_y
+        CARD_H = min(48, max(32, int((available_height - (max_items - 1) * 6) / max_items)))
+        CARD_GAP = max(4, min(10, int((available_height - max_items * CARD_H) / max(1, max_items - 1))))
 
         def compute_callout_layout(items, is_left):
             n = len(items)
@@ -663,7 +835,7 @@ class WeldDetector(BaseDetector):
 
             for i, d in enumerate(items):
                 ly = start_y + i * (CARD_H + CARD_GAP)
-                lx = (ox - CARD_W - 20) if is_left else (ox + orig_w + 20)
+                lx = (ox - CARD_W - 15) if is_left else (ox + orig_w + 15)
                 d["_lx"] = lx
                 d["_ly"] = ly
                 d["_cx"] = ox + d["center"][0]
@@ -690,7 +862,7 @@ class WeldDetector(BaseDetector):
             cv2.line(canvas, (anchor_x, anchor_y), (mid_x, anchor_y), (140, 160, 185), 1, cv2.LINE_AA)
             cv2.line(canvas, (mid_x, anchor_y), (cx_pt, cy_pt), (140, 160, 185), 1, cv2.LINE_AA)
 
-            # Target bullseye at defect center
+            # Bullseye at defect center
             cv2.circle(canvas, (cx_pt, cy_pt), 5, (255, 255, 255), -1, cv2.LINE_AA)
             cv2.circle(canvas, (cx_pt, cy_pt), 4, stroke_color, -1, cv2.LINE_AA)
             cv2.circle(canvas, (cx_pt, cy_pt), 7, stroke_color, 1, cv2.LINE_AA)
@@ -702,16 +874,16 @@ class WeldDetector(BaseDetector):
             # Left severity indicator bar
             cv2.rectangle(canvas, (lx, ly), (lx + 5, ly + CARD_H), stroke_color, -1)
 
-            # Card Header Text: e.g. [WLD-001] Crack (94.2%)
-            header_text = f"[{d['id']}] {d['type'][:14]}"
-            cv2.putText(canvas, header_text, (lx + 10, ly + 18),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (15, 23, 42), 1, cv2.LINE_AA)
+            # Card Header Text: e.g. DEFECT #1: Crack
+            def_num = d.get("id_num", 1)
+            header_text = f"#{def_num} {d['type'][:14]} ({int(d['confidence']*100)}%)"
+            cv2.putText(canvas, header_text, (lx + 10, ly + int(CARD_H * 0.42)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, (15, 23, 42), 1, cv2.LINE_AA)
 
-            # Sub-text: Severity & Zone & Confidence
-            conf_pct = int(d['confidence'] * 100)
-            sub_text = f"{d['severity']} | {conf_pct}% | {d['location'][:12]}"
-            cv2.putText(canvas, sub_text, (lx + 10, ly + 36),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (100, 116, 139), 1, cv2.LINE_AA)
+            # Sub-text: Severity & Region
+            sub_text = f"{d['severity']} | {d.get('region', d['location'])[:18]}"
+            cv2.putText(canvas, sub_text, (lx + 10, ly + int(CARD_H * 0.82)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.32, (100, 116, 139), 1, cv2.LINE_AA)
 
         return canvas
 

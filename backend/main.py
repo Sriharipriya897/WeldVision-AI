@@ -68,7 +68,7 @@ async def inspect_image(file: UploadFile = File(...)):
         if not image_bytes:
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
         
-        result = detector.analyze(image_bytes)
+        result = detector.analyze(image_bytes, filename=file.filename or "welded_specimen.jpg")
 
         # Strip internal layout keys before serializing
         _internal = {"_lx", "_ly", "_cx", "_cy", "_is_left", "items"}
