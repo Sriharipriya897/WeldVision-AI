@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+backend/__pycache__/
+*.pyc
+
+# Build outputs
+frontend/dist/
+dist/
+
+# Binaries & Executables
+*.exe
+cloudflared.exe
+ngrok.exe
+bore.exe
+
+# Temporary scratch & tunnel scripts
+run_public_tunnel.py
+scratch_run_lt.py
+run_localtunnel.cjs
+
+# Environment variables & local configs
+.env
+.env.local
+*.log
+
+# Root temporary package files
+/package.json
+/package-lock.json

@@ -1,8 +1,11 @@
+import os
 import io
 import datetime
+from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, JSONResponse
+from fastapi.responses import Response, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from detector import WeldDetector, CorrosionDetector
 from pdf_generator import generate_pdf_report
@@ -26,13 +29,27 @@ app.add_middleware(
 detector = WeldDetector()
 
 
-@app.get("/")
-def root():
+# ─── API Routes ───────────────────────────────────────────────────────────────
+
+@app.get("/api/health")
+def health_check():
     return {
         "status": "online",
         "system": "WeldVision AI - Industrial Welding Inspection System",
         "version": "2.0.0",
+        "model_loaded": detector.model is not None,
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+
+@app.get("/api/model-info")
+def model_info():
+    return {
+        "model_architecture": "Ultralytics YOLO11 Segmentation (YOLO11n-seg)",
+        "weights_path": str(detector.model_path),
+        "classes": list(detector.model.names.values()) if hasattr(detector.model, "names") else [],
+        "device": detector.device,
+        "status": "ready"
     }
 
 
@@ -83,6 +100,30 @@ async def download_pdf(data: dict = Body(...)):
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
 
 
+# ─── Static Frontend Serving & SPA Routing ───────────────────────────────────
+
+# Path to the compiled frontend production bundle
+FRONTEND_DIST = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
+
+if os.path.exists(FRONTEND_DIST):
+    assets_dir = os.path.join(FRONTEND_DIST, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str = ""):
+        # Check if the requested file exists in dist (e.g. favicon.svg, icons.svg)
+        target = os.path.join(FRONTEND_DIST, full_path) if full_path else os.path.join(FRONTEND_DIST, "index.html")
+        if os.path.isfile(target):
+            return FileResponse(target)
+        # Otherwise fallback to index.html for client-side routing
+        index_file = os.path.join(FRONTEND_DIST, "index.html")
+        if os.path.isfile(index_file):
+            return FileResponse(index_file)
+        return JSONResponse({"status": "WeldVision AI Backend Online", "docs": "/docs"})
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+

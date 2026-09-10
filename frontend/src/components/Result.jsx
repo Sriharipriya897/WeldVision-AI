@@ -508,6 +508,7 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
                 <th className="py-3 px-4">Defect ID</th>
                 <th className="py-3 px-4">Defect Name</th>
                 <th className="py-3 px-4">Severity</th>
+                <th className="py-3 px-4">AI Confidence</th>
                 <th className="py-3 px-4">Weld Zone Location</th>
                 <th className="py-3 px-4">Size (mm)</th>
                 <th className="py-3 px-4">Defect Area (%)</th>
@@ -538,6 +539,18 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
                         <td className="py-3.5 px-4 font-bold text-slate-900">{d.type || d.defect_name}</td>
                         <td className="py-3.5 px-4">
                           <SeverityBadge value={d.severity} />
+                        </td>
+                        <td className="py-3.5 px-4 font-mono">
+                          <span className="font-bold text-slate-800">{Math.round((d.confidence || 0) * 100)}%</span>
+                          {d.confidence_tier && (
+                            <span className={`ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-semibold ${
+                              d.confidence >= 0.20 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                              d.confidence >= 0.10 ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+                              'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}>
+                              {d.confidence_tier}
+                            </span>
+                          )}
                         </td>
                         <td className="py-3.5 px-4 text-slate-600">{d.location || d.weld_zone || 'Centerline'}</td>
                         <td className="py-3.5 px-4 font-mono">{d.size_mm || 'N/A'}</td>
