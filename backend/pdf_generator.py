@@ -2,6 +2,7 @@ import base64
 import io
 import math
 import datetime
+import re
 from PIL import Image as PILImage
 
 from reportlab.lib.pagesizes import A4
@@ -13,6 +14,15 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+
+def _clean_svg_text(val: str) -> str:
+    if not val:
+        return ""
+    s = re.sub(r'(?i)\bsvg\b', '', str(val))
+    s = re.sub(r'(?i)^svg[-_ ]*', '', s)
+    s = re.sub(r'(?i)^svg([A-Z])', r'\1', s)
+    return re.sub(r'\s+', ' ', s).strip()
+
 
 # ── Color Palette ─────────────────────────────────────────────────────────────
 DARK_HEADER   = colors.HexColor("#0F172A")
@@ -282,8 +292,8 @@ def generate_pdf_report(data: dict) -> bytes:
 
     # Defect Type Breakdown Table
     b_rows = [[
-        Paragraph("<b>Defect Type</b>", T_tbl_h),
-        Paragraph("<b>Count</b>", T_tbl_h),
+        Paragraph("<b>Class Name</b>", T_tbl_h),
+        Paragraph("<b>Detections</b>", T_tbl_h),
         Paragraph("<b>Class Severity</b>", T_tbl_h),
         Paragraph("<b>Status Classification</b>", T_tbl_h),
     ]]
@@ -297,8 +307,21 @@ def generate_pdf_report(data: dict) -> bytes:
         ])
     else:
         for def_name, count in breakdown.items():
-            sev = "Low" if def_name == "Good Welding" else ("Critical" if def_name in ("Crack", "Bad Welding", "Lack of Penetration") else ("High" if def_name in ("Porosity", "Undercut", "Lack of Fusion") else "Medium"))
-            stat_lbl = "Accepted" if def_name == "Good Welding" else ("Rejected" if sev == "Critical" else ("Requires Repair" if sev == "High" else "Accepted With Repair"))
+            if def_name == "Good Welding":
+                sev = "Low"
+                stat_lbl = "Conforming / Accepted"
+            else:
+                class_defs = [d for d in defects if d.get("type") == def_name]
+                max_conf = max((d.get("confidence", 0.0) for d in class_defs), default=0.0)
+                if max_conf >= 0.20:
+                    stat_lbl = "Confirmed Defect"
+                    sev = "Critical" if def_name in ("Crack", "Bad Welding", "Lack of Penetration") else ("High" if def_name in ("Porosity", "Undercut", "Lack of Fusion") else "Medium")
+                elif max_conf >= 0.10:
+                    stat_lbl = "Review Required"
+                    sev = "Medium"
+                else:
+                    stat_lbl = "Possible Indication"
+                    sev = "Low"
             sc = SEVERITY_COLOR_MAP.get(sev, GREEN)
             b_rows.append([
                 Paragraph(f"<b>{def_name}</b>", T_tbl_b),
@@ -321,8 +344,8 @@ def generate_pdf_report(data: dict) -> bytes:
     # Complete Individual Detections Table
     _section_header(story, f"COMPLETE DETECTED DEFECTS CATALOGUE ({total_defects} Total)", T_h2, 0)
 
-    d_heads = ["Defect #", "Defect Type", "Confidence", "Exact Detected Location", "Severity", "Status"]
-    d_widths = [22 * mm, 36 * mm, 24 * mm, 45 * mm, 24 * mm, 24 * mm]
+    d_heads = ["Defect #", "Defect Type", "Confidence", "Exact Detected Location", "Detected Size", "Status"]
+    d_widths = [20 * mm, 34 * mm, 22 * mm, 47 * mm, 28 * mm, 24 * mm]
     d_rows = [[Paragraph(h, T_tbl_h) for h in d_heads]]
 
     if not defects:
@@ -331,20 +354,23 @@ def generate_pdf_report(data: dict) -> bytes:
             Paragraph("Good Welding (No Defect)", T_tbl_b),
             Paragraph(f"{conf_pct}%", T_tbl_bc),
             Paragraph("Full Weld Seam", T_tbl_b),
-            Paragraph("<font color='#10B981'><b>Low</b></font>", T_tbl_bc),
+            Paragraph("—", T_tbl_bc),
             Paragraph("<font color='#10B981'><b>Accepted</b></font>", T_tbl_bc),
         ])
     else:
         for idx, d in enumerate(defects, 1):
             sc = SEVERITY_COLOR_MAP.get(d.get("severity", "Low"), YELLOW)
             conf_val = int(round(d.get("confidence", 0.0) * 100))
+            loc_clean = _clean_svg_text(d.get("location", d.get("region", "Center weld region")))
+            size_str = str(d.get("detected_size", d.get("region_size", d.get("size_mm", "N/A"))))
+            status_clean = str(d.get("status", d.get("confidence_tier", "Possible Indication")))
             d_rows.append([
                 Paragraph(f"<b>DEFECT #{idx}</b>", T_tbl_bc),
                 Paragraph(f"<b>{d.get('type', '—')}</b>", T_tbl_b),
                 Paragraph(f"<b>{conf_val}%</b>", T_tbl_bc),
-                Paragraph(d.get("location", d.get("region", "Center weld region")), T_tbl_b),
-                Paragraph(f"<font color='{sc.hexval()}'><b>{d.get('severity', 'Medium')}</b></font>", T_tbl_bc),
-                Paragraph(f"<b>{d.get('status', 'Repair Required')}</b>", T_tbl_bc),
+                Paragraph(loc_clean, T_tbl_b),
+                Paragraph(size_str, T_tbl_bc),
+                Paragraph(f"<b>{status_clean}</b>", T_tbl_bc),
             ])
 
     dtbl = Table(d_rows, colWidths=d_widths, repeatRows=1)
@@ -379,26 +405,32 @@ def generate_pdf_report(data: dict) -> bytes:
         for idx, d in enumerate(defects, 1):
             sc = SEVERITY_COLOR_MAP.get(d.get("severity", "Medium"), YELLOW)
             conf_val = int(round(d.get("confidence", 0.0) * 100))
-            
+            loc_clean = _clean_svg_text(d.get("location", d.get("region", "Center weld region")))
+            obs_clean = _clean_svg_text(d.get("observation", f"{d.get('type')} indication detected."))
+            prob_clean = _clean_svg_text(d.get("problem", "Defect indication identified in weld seam."))
+            cause_clean = _clean_svg_text(d.get("possible_cause", "Possible contributing factors under review."))
+            act_clean = _clean_svg_text(d.get("recommended_action", "Inspect area and apply corrective measures per WPS."))
+            tier_label = str(d.get("confidence_tier", "Confirmed Defect" if (d.get("confidence", 0.0) >= 0.20) else ("Review Required" if d.get("confidence", 0.0) >= 0.10 else "Possible Indication")))
+
             p_card = [
                 [
-                    Paragraph(f"<b>DEFECT #{idx} — {d.get('type')}</b> (Severity: <font color='{sc.hexval()}'><b>{d.get('severity')}</b></font> | Confidence: <b>{conf_val}%</b> | Location: <b>{d.get('location')}</b>)", T_h3),
+                    Paragraph(f"<b>DEFECT #{idx} — {d.get('type')}</b> ({tier_label} | Severity: <font color='{sc.hexval()}'><b>{d.get('severity')}</b></font> | Confidence: <b>{conf_val}%</b> | Location: <b>{loc_clean}</b>)", T_h3),
+                ],
+                [
+                    Paragraph("<b>• Observation:</b>", T_prob_lbl),
+                    Paragraph(obs_clean, T_prob_val),
                 ],
                 [
                     Paragraph("<b>• Problem:</b>", T_prob_lbl),
-                    Paragraph(d.get("problem", "Defect indication identified in weld seam."), T_prob_val),
-                ],
-                [
-                    Paragraph("<b>• Why It Is a Defect:</b>", T_prob_lbl),
-                    Paragraph(d.get("why_defect", "Degrades structural integrity and creates stress concentrations."), T_prob_val),
+                    Paragraph(prob_clean, T_prob_val),
                 ],
                 [
                     Paragraph("<b>• Possible Cause:</b>", T_prob_lbl),
-                    Paragraph(d.get("possible_cause", "Improper heat input or joint contamination."), T_prob_val),
+                    Paragraph(cause_clean, T_prob_val),
                 ],
                 [
                     Paragraph("<b>• Recommended Action:</b>", T_prob_lbl),
-                    Paragraph(d.get("recommended_action", "Excavate defect and re-weld adhering to WPS."), T_prob_val),
+                    Paragraph(act_clean, T_prob_val),
                 ]
             ]
 

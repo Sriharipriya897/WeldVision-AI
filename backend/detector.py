@@ -1,10 +1,20 @@
 import os
+import re
 import cv2
 import numpy as np
 import base64
 import math
 import datetime
 from pathlib import Path
+
+def _clean_svg_text(val: str) -> str:
+    if not val:
+        return ""
+    s = re.sub(r'(?i)\bsvg\b', '', str(val))
+    s = re.sub(r'(?i)^svg[-_ ]*', '', s)
+    s = re.sub(r'(?i)^svg([A-Z])', r'\1', s)
+    return re.sub(r'\s+', ' ', s).strip()
+
 
 # Safeguard Windows DLL directory for PyTorch
 torch_lib = r'C:\Users\user\AppData\Local\Programs\Python\Python313\Lib\site-packages\torch\lib'
@@ -330,36 +340,88 @@ class WeldDetector(BaseDetector):
         # Include EVERY detected defect (no dropping or truncating)
         defects = sorted(raw_detections, key=lambda d: (-d["confidence"], d["id_num"] if "id_num" in d else 0))
 
-        # Defect Breakdown dictionary containing only detected classes
-        breakdown = {}
+        # Separate Detected Classes from Active Defects
+        active_breakdown = {}
         for d in defects:
             t = d["type"]
-            breakdown[t] = breakdown.get(t, 0) + 1
-        if good_welding_count > 0:
-            breakdown["Good Welding"] = good_welding_count
+            active_breakdown[t] = active_breakdown.get(t, 0) + 1
 
-        # Assign sequential IDs and populate complete engineering analysis
+        detected_classes = dict(active_breakdown)
+        if good_welding_count > 0:
+            detected_classes["Good Welding"] = good_welding_count
+
+        breakdown = detected_classes  # Backward compatibility
+
+        # Defect Counting across strict confidence tiers
+        total_active_defects = len(defects)
+        total_model_detections = total_active_defects + good_welding_count
+        confirmed_defects_count = sum(1 for d in defects if d.get("confidence", 0.0) >= 0.20)
+        review_required_count = sum(1 for d in defects if 0.10 <= d.get("confidence", 0.0) < 0.20)
+        possible_indications_count = sum(1 for d in defects if d.get("confidence", 0.0) < 0.10)
+
+        # Assign sequential IDs and populate dynamic image-specific analysis
         for idx, d in enumerate(defects, 1):
             d["id"] = f"WLD-{idx:03d}"
             d["id_num"] = idx
             meta = WELD_DEFECT_METADATA.get(d["type"], WELD_DEFECT_METADATA.get(d["type"].capitalize(), WELD_DEFECT_METADATA["Porosity"]))
-            
-            d["problem"] = meta["problem"]
-            d["why_defect"] = meta["why_defect"]
-            d["root_cause"] = meta["possible_cause"]
-            d["possible_cause"] = meta["possible_cause"]
-            d["repair_method"] = meta["recommended_action"]
-            d["recommended_action"] = meta["recommended_action"]
-            d["recommended_repair"] = meta["recommended_action"]
-            d["repair_priority"] = meta["repair_priority"]
-            d["status"] = meta["status"]
+
+            conf = d.get("confidence", 0.0)
+
+            # Strict Confidence Tiers:
+            # CONFIDENCE >= 20% -> Confirmed Defect
+            # CONFIDENCE 10%–19.99% -> Review Required
+            # CONFIDENCE < 10% -> Possible Indication
+            if conf >= 0.20:
+                d["confidence_tier"] = "Confirmed Defect"
+                d["confidence_qualifier"] = "High-confidence" if conf >= 0.50 else "Moderate-confidence"
+                d["status"] = meta["status"]
+                d["repair_priority"] = meta["repair_priority"]
+            elif conf >= 0.10:
+                d["confidence_tier"] = "Review Required"
+                d["confidence_qualifier"] = "Review-required"
+                d["status"] = "Review Required"
+                d["repair_priority"] = "Verification Required"
+            else:
+                d["confidence_tier"] = "Possible Indication"
+                d["confidence_qualifier"] = "Possible low-confidence"
+                d["status"] = "Possible Indication"
+                d["repair_priority"] = "Verification Recommended"
+
             d["explain"] = meta["explain"]
             d["severity_hex"] = SEVERITY_HEX.get(d["severity"], "#F59E0B")
+            d["why_defect"] = meta["why_defect"]
 
-            # Calibrated size estimation
-            bw_mm = round(d["bbox"][2] * 0.12, 1)
-            bh_mm = round(d["bbox"][3] * 0.12, 1)
-            d["size_mm"] = f"{bw_mm} mm x {bh_mm} mm"
+            # Size descriptor based on area percentage (no invented mm values)
+            area_pct = d.get("area_pct", 0.0)
+            if area_pct >= 8.0:
+                d["size_descriptor"] = "Large"
+            elif area_pct >= 3.0:
+                d["size_descriptor"] = "Moderate"
+            elif area_pct >= 0.5:
+                d["size_descriptor"] = "Small"
+            else:
+                d["size_descriptor"] = "Isolated"
+
+            # Detected size strings for display (no fake mm)
+            bw_px = d["bbox"][2]
+            bh_px = d["bbox"][3]
+            d["detected_size"] = f"{bw_px} px × {bh_px} px ({d['size_descriptor']})"
+            d["region_size"] = f"{bw_px} px × {bh_px} px"
+            d["size_mm"] = d["detected_size"]
+
+            # Sanitize region and location (clean any accidental svg text artifacts)
+            d["location"] = _clean_svg_text(d["location"])
+            d["region"] = _clean_svg_text(d["region"])
+
+            # Generate dynamic image-specific analysis
+            analysis = self._generate_dynamic_analysis(d, defects, w, h)
+            d["observation"] = _clean_svg_text(analysis["observation"])
+            d["problem"] = _clean_svg_text(analysis["problem"])
+            d["possible_cause"] = _clean_svg_text(analysis["possible_cause"])
+            d["root_cause"] = d["possible_cause"]
+            d["recommended_action"] = _clean_svg_text(analysis["recommended_action"])
+            d["repair_method"] = d["recommended_action"]
+            d["recommended_repair"] = d["recommended_action"]
 
         # ── Analytics & Quality Scoring ──────────────────────────────────────
         total_defects = len(defects)
@@ -372,26 +434,53 @@ class WeldDetector(BaseDetector):
         low_count      = sum(1 for d in defects if d["severity"] == "Low")
 
         quality_score = self._compute_weld_quality_score(defects, defective_area_pct)
-        condition_info = self._get_condition_label(quality_score, defects)
-        acceptance_status = self._determine_acceptance_status(quality_score, critical_count, high_count, medium_count, total_defects)
-        overall_severity = self._determine_overall_severity(critical_count, high_count, medium_count, defective_area_pct)
+        condition_info = self._get_condition_label(quality_score, defects, confirmed_defects_count)
+        acceptance_status = self._determine_acceptance_status(
+            quality_score, critical_count, high_count, medium_count, total_defects,
+            confirmed_count=confirmed_defects_count, review_count=review_required_count
+        )
+        overall_severity = self._determine_overall_severity(
+            critical_count, high_count, medium_count, defective_area_pct,
+            confirmed_count=confirmed_defects_count
+        )
         overall_risk = overall_severity
-        repair_priority = self._determine_overall_repair_priority(critical_count, high_count, medium_count, defects)
+        repair_priority = self._determine_overall_repair_priority(
+            critical_count, high_count, medium_count, defects,
+            confirmed_count=confirmed_defects_count
+        )
 
         dominant_type = max(set(d["type"] for d in defects), key=lambda t: sum(1 for d in defects if d["type"] == t))
         largest_d = max(defects, key=lambda d: d["area_pct"])
-        largest_defect_str = f"{largest_d['type']} ({largest_d['size_mm']})"
+        largest_defect_str = f"{largest_d['type']} ({largest_d['detected_size']})"
 
-        inspection_conf = round(
-            sum(d["confidence"] * max(0.1, d["area_pct"]) for d in defects) /
-            max(sum(max(0.1, d["area_pct"]) for d in defects), 0.01) * 100, 1
-        ) if defects else 95.0
-        inspection_conf = min(99.0, max(80.0, inspection_conf))
+        # ── Deterministic Calculation: Overall Detection Confidence ─────────
+        # Calculated deterministically as the arithmetic mean of confidence scores
+        # of actual detections found in this specimen.
+        # No fake precision metric, no arbitrary clamping (removed artificial clamp to 80%).
+        if defects:
+            overall_detection_conf = round(float(np.mean([d["confidence"] for d in defects])) * 100, 1)
+        elif good_welding_count > 0:
+            overall_detection_conf = 98.0
+        else:
+            overall_detection_conf = 98.0
 
-        # Build dynamic conclusion & quality assessment explanation
-        conclusion_text = self._generate_weld_conclusion(defects, breakdown, acceptance_status, critical_count, high_count)
-        quality_explanation = self._generate_quality_explanation(quality_score, acceptance_status, overall_severity, defects, breakdown)
-        verdict = self._generate_weld_verdict(defects, defective_area_pct, quality_score, acceptance_status, dominant_type)
+        inspection_conf = overall_detection_conf
+
+        # Build dynamic conclusion & quality assessment explanation using ONLY actual detections
+        conclusion_text = self._generate_weld_conclusion(
+            defects, active_breakdown, acceptance_status, critical_count, high_count,
+            confirmed_count=confirmed_defects_count, review_count=review_required_count,
+            possible_count=possible_indications_count
+        )
+        quality_explanation = self._generate_quality_explanation(
+            quality_score, acceptance_status, overall_severity, defects, active_breakdown,
+            confirmed_count=confirmed_defects_count, review_count=review_required_count,
+            possible_count=possible_indications_count
+        )
+        verdict = self._generate_weld_verdict(
+            defects, defective_area_pct, quality_score, acceptance_status, dominant_type,
+            confirmed_count=confirmed_defects_count
+        )
 
         possible_causes = list(dict.fromkeys(d["possible_cause"] for d in defects))
         recommended_actions = list(dict.fromkeys(d["recommended_action"] for d in defects))
@@ -403,6 +492,9 @@ class WeldDetector(BaseDetector):
                 "defect_id": d["id"],
                 "defect_type": d["type"],
                 "severity": d["severity"],
+                "confidence": d["confidence"],
+                "confidence_tier": d["confidence_tier"],
+                "observation": d["observation"],
                 "problem": d["problem"],
                 "why_defect": d["why_defect"],
                 "possible_cause": d["possible_cause"],
@@ -425,9 +517,17 @@ class WeldDetector(BaseDetector):
             "model_name":           "Ultralytics YOLO11-seg (Industrial Weld Model)",
             "model_type":           "Instance Segmentation & Defect Analysis",
             "inspection_status":    "Complete",
-            "total_defects":        total_defects,
+            "total_defects":        total_active_defects,
+            "total_active_defects": total_active_defects,
+            "total_model_detections": total_model_detections,
+            "confirmed_defects_count": confirmed_defects_count,
+            "review_required_count": review_required_count,
+            "possible_indications_count": possible_indications_count,
+            "good_welding_count":   good_welding_count,
+            "detected_classes":     detected_classes,
+            "active_defects_breakdown": active_breakdown,
             "defects":              defects,
-            "breakdown":            breakdown,
+            "breakdown":            detected_classes,
             "problem_analysis":     problem_analysis_list,
             "quality_assessment": {
                 "score":                quality_score,
@@ -437,8 +537,16 @@ class WeldDetector(BaseDetector):
             },
             "conclusion":           conclusion_text,
             "summary": {
-                "total_defects":        total_defects,
-                "breakdown":            breakdown,
+                "total_model_detections": total_model_detections,
+                "total_defects":        total_active_defects,
+                "total_active_defects": total_active_defects,
+                "confirmed_defects":    confirmed_defects_count,
+                "review_required":      review_required_count,
+                "possible_indications": possible_indications_count,
+                "good_welding_detections": good_welding_count,
+                "detected_classes":     detected_classes,
+                "active_defects":       active_breakdown,
+                "breakdown":            detected_classes,
                 "critical_defects":     critical_count,
                 "major_defects":        high_count,
                 "minor_defects":        medium_count,
@@ -448,6 +556,7 @@ class WeldDetector(BaseDetector):
                 "weld_coverage_percent": weld_coverage_pct,
                 "defective_area_percent": defective_area_pct,
                 "inspection_confidence": inspection_conf,
+                "overall_detection_confidence": overall_detection_conf,
             },
             "weld_quality": {
                 "score":                quality_score,
@@ -476,6 +585,7 @@ class WeldDetector(BaseDetector):
             "largest_defect":       largest_defect_str,
             "verdict":              verdict,
             "inspection_confidence": inspection_conf,
+            "overall_detection_confidence": overall_detection_conf,
         }
 
     # ── Helpers & Generators ────────────────────────────────────────────
@@ -528,68 +638,243 @@ class WeldDetector(BaseDetector):
             res["segmentation_mask"] = mask_pts
         return res
 
+    # ── Dynamic Image-Specific Analysis Generator ──────────────────────────
+
+    def _generate_dynamic_analysis(self, defect: dict, all_defects: list, img_w: int, img_h: int) -> dict:
+        """
+        Generates image-specific, detection-specific analysis text for a single defect.
+        All output is deterministic — the same detection data always produces the same text.
+        No randomization. No invented physical measurements.
+        """
+        dtype = defect.get("type", "Unknown")
+        conf = defect.get("confidence", 0.0)
+        conf_pct = int(round(conf * 100))
+        conf_tier = defect.get("confidence_tier", "Confirmed Defect")
+        conf_qual = defect.get("confidence_qualifier", "Moderate-confidence")
+        region = _clean_svg_text(defect.get("region", defect.get("location", "Center weld region")))
+        area_pct = defect.get("area_pct", 0.0)
+        size_desc = defect.get("size_descriptor", "Small")
+        has_mask = "segmentation_mask" in defect and len(defect.get("segmentation_mask", [])) >= 3
+        severity = defect.get("severity", "Medium")
+
+        # Sort same-type detections by confidence/area to establish unique context
+        same_type_defs = sorted(
+            [d for d in all_defects if d.get("type") == dtype],
+            key=lambda x: (-x.get("confidence", 0.0), -x.get("area_pct", 0.0))
+        )
+        same_type_count = len(same_type_defs)
+        rank = same_type_defs.index(defect) if defect in same_type_defs else 0
+
+        # Determine clustering: same-type detections within close proximity
+        clustered = False
+        if same_type_count >= 2:
+            cx, cy = defect.get("center", [img_w // 2, img_h // 2])
+            for other in same_type_defs:
+                if other is defect:
+                    continue
+                ox, oy = other.get("center", [0, 0])
+                dist = ((cx - ox) ** 2 + (cy - oy) ** 2) ** 0.5
+                if dist < max(img_w, img_h) * 0.25:
+                    clustered = True
+                    break
+
+        # ── Good Welding — not a defect ──────────────────────────────────
+        if dtype == "Good Welding":
+            return {
+                "observation": f"No active defect indication detected in the inspected {region.lower()}. YOLO11 segmentation classified this region as Good Welding with {conf_pct}% confidence.",
+                "problem": "None (Conforming Weld). No active defect indication present in this region.",
+                "possible_cause": "Optimal welding procedure specification (WPS) execution with balanced heat input, consistent travel speed, and proper gas shielding.",
+                "recommended_action": "No corrective action required. Weld region conforms to AWS D1.1 / ISO 5817 visual inspection acceptance criteria.",
+            }
+
+        # ── Build observation (specific to detection evidence, non-repetitive) ──
+        mask_desc = f"with segmentation mask confirming a {size_desc.lower()} defect region ({area_pct}% of image area)" if has_mask else f"within a {size_desc.lower()} bounding box region ({area_pct}% of image area)"
+
+        if conf < 0.10:
+            # Possible indication (<10%)
+            if rank == 0 or same_type_count == 1:
+                observation = f"Possible low-confidence {dtype.lower()} indication detected in the {region.lower()} at {conf_pct}% confidence ({area_pct}% of image area)."
+            else:
+                observation = f"Possible low-confidence secondary {dtype.lower()} indication detected in the {region.lower()} at {conf_pct}% confidence."
+        elif conf < 0.20:
+            # Review required (10% - 19.99%)
+            if rank == 0:
+                observation = f"Review-required {dtype.lower()} indication detected in the {region.lower()}, representing approximately {area_pct}% of image area at {conf_pct}% confidence."
+            else:
+                primary = same_type_defs[0]
+                is_smaller = area_pct < primary.get("area_pct", area_pct)
+                comp_str = f"smaller than the primary {dtype.lower()} indication" if is_smaller else f"representing {area_pct}% of image area"
+                observation = f"Review-required {dtype.lower()} indication detected in the {region.lower()}, {comp_str} at {conf_pct}% confidence."
+        else:
+            # Confirmed defect (>= 20%)
+            if rank == 0:
+                observation = f"{conf_qual} {dtype.lower()} indication detected in the {region.lower()}, representing approximately {area_pct}% of image area at {conf_pct}% AI confidence."
+            else:
+                observation = f"Additional {conf_qual.lower()} {dtype.lower()} indication detected in the {region.lower()} {mask_desc} at {conf_pct}% AI confidence."
+
+        if clustered and same_type_count >= 2:
+            observation += f" Located in close proximity to adjacent {dtype.lower()} indication(s) in this zone."
+
+        observation = observation.replace("..", ".").strip()
+
+        # ── Build problem statement ──────────────────────────────────────
+        meta = WELD_DEFECT_METADATA.get(dtype, WELD_DEFECT_METADATA.get(dtype.capitalize(), WELD_DEFECT_METADATA["Porosity"]))
+        base_problem = meta["problem"]
+
+        if conf < 0.10:
+            # For <10%: Do NOT show Rejected / Requires Repair / aggressive claims
+            problem = f"Possible unconfirmed indication detected at {conf_pct}% AI confidence in the {region.lower()}. Physical visual verification or complementary NDT is required to confirm whether this represents a true discontinuity or a surface mark."
+        elif conf < 0.20:
+            # For 10-19.99%: Review required
+            problem = f"Potential {dtype.lower()} indication identified at {conf_pct}% confidence in the {region.lower()}. Indication requires visual verification prior to finalizing joint quality classification."
+        else:
+            # For >=20%: Confirmed defect
+            if severity == "Critical":
+                sev_ctx = "This is a critical-severity indication requiring engineering review and repair before service"
+            elif severity == "High":
+                sev_ctx = "This is a high-severity indication requiring repair before final acceptance"
+            elif severity == "Medium":
+                sev_ctx = "This is a medium-severity indication; rework/repair is recommended"
+            else:
+                sev_ctx = "This is a low-severity indication within cosmetic rework tolerance"
+            problem = f"{base_problem} {sev_ctx}. AI confidence is {conf_pct}% in the {region.lower()}."
+
+        problem = problem.replace("..", ".").strip()
+
+        # ── Build possible cause (framed as potential/contributing) ────────
+        base_cause = meta["possible_cause"].rstrip(".")
+
+        if conf < 0.10:
+            possible_cause = f"Unconfirmed low-confidence indication ({conf_pct}%). Potential contributing factors if verified include: {base_cause}."
+        elif conf < 0.20:
+            possible_cause = f"Tentative indication pending physical verification. Possible contributing factors include: {base_cause}."
+        else:
+            cause_parts = [f"Possible contributing factors include: {base_cause}"]
+            if clustered and same_type_count > 1:
+                cause_parts.append(f"Clustered distribution of {same_type_count} {dtype.lower()} indications in the {region.lower()} may suggest localized thermal or shielding instability in that zone")
+            elif area_pct >= 5.0:
+                cause_parts.append("The relatively large affected area suggests sustained or compounding process deviation")
+            possible_cause = ". ".join(cause_parts) + "."
+
+        possible_cause = possible_cause.replace("..", ".").strip()
+
+        # ── Build recommended action (strict confidence-based) ───────────
+        base_action = meta["recommended_action"].rstrip(".")
+
+        if conf < 0.10:
+            # EXACT PROMPT REQUIREMENT FOR <10%:
+            recommended_action = "Manual visual verification or appropriate NDT is recommended before any corrective action is taken."
+        elif conf < 0.20:
+            # EXACT PROMPT REQUIREMENT FOR 10-19.99%:
+            recommended_action = f"Review the indicated region in the {region.lower()} and verify visual/NDT indications before repair."
+        else:
+            # Confirmed defect (>= 20%)
+            action_parts = [base_action]
+            if severity == "Critical":
+                action_parts.append(f"Given the critical severity of this {dtype.lower()} indication in the {region.lower()}, immediate corrective action and re-inspection are required before service")
+            elif severity == "High":
+                action_parts.append(f"Repair of this {dtype.lower()} indication in the {region.lower()} should be completed prior to final acceptance")
+            recommended_action = ". ".join(action_parts) + "."
+
+        recommended_action = recommended_action.replace("..", ".").strip()
+
+        return {
+            "observation": observation,
+            "problem": problem,
+            "possible_cause": possible_cause,
+            "recommended_action": recommended_action,
+        }
+
     def _compute_weld_quality_score(self, defects, defective_area_pct):
         """
-        Dynamically computes quality score based on ALL detected defects.
-        No hardcoded fixed values.
+        Dynamically computes quality score using confidence-aware logic.
+        Confirmed defects (>=20%) drive penalties; <10% indications have minimal/zero penalty;
+        Good Welding has zero penalty.
         """
         if not defects:
             return 98
 
-        critical_count = sum(1 for d in defects if d["severity"] == "Critical")
-        high_count     = sum(1 for d in defects if d["severity"] == "High")
-        medium_count   = sum(1 for d in defects if d["severity"] == "Medium")
-        low_count      = sum(1 for d in defects if d["severity"] == "Low")
+        confirmed_defs = [d for d in defects if d.get("confidence", 0.0) >= 0.20]
+        review_defs = [d for d in defects if 0.10 <= d.get("confidence", 0.0) < 0.20]
+        possible_defs = [d for d in defects if d.get("confidence", 0.0) < 0.10]
+
+        critical_confirmed = sum(1 for d in confirmed_defs if d["severity"] == "Critical")
+        high_confirmed = sum(1 for d in confirmed_defs if d["severity"] == "High")
+        medium_confirmed = sum(1 for d in confirmed_defs if d["severity"] == "Medium")
+        low_confirmed = sum(1 for d in confirmed_defs if d["severity"] == "Low")
 
         score = 100.0
 
-        # Defect Area Penalty (proportional)
-        score -= min(35.0, defective_area_pct * 3.2)
+        # Confirmed defect area penalty
+        confirmed_area = sum(d.get("area_pct", 0.0) for d in confirmed_defs)
+        score -= min(30.0, confirmed_area * 3.0)
 
-        # Severity & Confidence Penalties for EVERY detection
-        for d in defects:
+        # Penalties based on confirmed defects
+        for d in confirmed_defs:
             sev = d["severity"]
             conf = d.get("confidence", 0.5)
-            weight = max(0.55, min(1.0, conf + 0.3))
+            weight = max(0.5, min(1.0, conf))
             if sev == "Critical":
                 score -= (32.0 * weight)
             elif sev == "High":
                 score -= (18.0 * weight)
             elif sev == "Medium":
-                score -= (7.5 * weight)
+                score -= (7.0 * weight)
             else:
-                score -= (2.5 * weight)
+                score -= (2.0 * weight)
 
-        # Multi-defect compounding penalty
-        if len(defects) >= 5:
-            score -= 10.0
-        elif len(defects) >= 3:
-            score -= 5.0
+        # Review-required (10-19.99%) minor penalty
+        for d in review_defs:
+            sev = d["severity"]
+            if sev == "Critical":
+                score -= 8.0
+            elif sev == "High":
+                score -= 5.0
+            elif sev == "Medium":
+                score -= 2.0
+            else:
+                score -= 0.5
+
+        # Possible indications (<10%) minimal penalty (0.5 pt each, capped at 2.0)
+        score -= min(2.0, len(possible_defs) * 0.5)
+
+        # Multi-defect compounding penalty ONLY if confirmed defects >= 2
+        if len(confirmed_defs) >= 4:
+            score -= 6.0
+        elif len(confirmed_defs) >= 2:
+            score -= 3.0
 
         final_score = int(round(score))
 
-        # Strict Engineering Caps based on AWS D1.1:
-        if critical_count > 0:
+        # Strict Engineering Caps ONLY for confirmed defects:
+        if critical_confirmed > 0:
             final_score = min(final_score, 42)
-        elif high_count > 0:
+        elif high_confirmed > 0:
             final_score = min(final_score, 62)
-        elif medium_count >= 3 or len(defects) >= 4:
+        elif medium_confirmed >= 3 or len(confirmed_defs) >= 4:
             final_score = min(final_score, 74)
-        elif medium_count > 0:
+        elif medium_confirmed > 0:
             final_score = min(final_score, 82)
+        elif len(confirmed_defs) == 0:
+            # If no confirmed defects at all, score must remain high
+            if len(review_defs) > 0:
+                final_score = max(80, min(92, final_score))
+            else:
+                final_score = max(90, min(96, final_score))
 
         return max(5, min(98, final_score))
 
-    def _get_condition_label(self, score, defects=None):
-        if defects:
-            critical_cnt = sum(1 for d in defects if d["severity"] == "Critical")
-            high_cnt     = sum(1 for d in defects if d["severity"] == "High")
-            medium_cnt   = sum(1 for d in defects if d["severity"] == "Medium")
+    def _get_condition_label(self, score, defects=None, confirmed_count=0):
+        if defects and confirmed_count > 0:
+            confirmed_defs = [d for d in defects if d.get("confidence", 0.0) >= 0.20]
+            critical_cnt = sum(1 for d in confirmed_defs if d["severity"] == "Critical")
+            high_cnt     = sum(1 for d in confirmed_defs if d["severity"] == "High")
+            medium_cnt   = sum(1 for d in confirmed_defs if d["severity"] == "Medium")
             if critical_cnt > 0 or score < 45:
                 return {"label": "Severe Failure", "desc": "Critical structural weld discontinuity detected"}
             if high_cnt > 0 or score < 60:
                 return {"label": "Poor", "desc": "Significant defects requiring rewelding"}
-            if medium_cnt >= 2 or len(defects) >= 3 or score < 75:
+            if medium_cnt >= 2 or len(confirmed_defs) >= 3 or score < 75:
                 return {"label": "Sub-Standard", "desc": "Multiple surface irregularities exceeding AWS tolerances"}
             if score < 85:
                 return {"label": "Moderate / Needs Repair", "desc": "Acceptable only after surface rework and de-spatter"}
@@ -605,17 +890,30 @@ class WeldDetector(BaseDetector):
         else:
             return {"label": "Severe Failure", "desc": "Weld failure rejecting quality threshold"}
 
-    def _determine_acceptance_status(self, score, critical_cnt, high_cnt, medium_cnt=0, total_defects=0):
-        if critical_cnt > 0 or score < 45:
+    def _determine_acceptance_status(self, score, critical_cnt, high_cnt, medium_cnt=0, total_defects=0, confirmed_count=0, review_count=0):
+        if confirmed_count == 0:
+            if review_count > 0:
+                return "Review Required"
+            elif total_defects > 0:
+                return "Verification Required"
+            else:
+                return "Accepted"
+
+        # Driven by confirmed defects
+        confirmed_critical = critical_cnt if confirmed_count > 0 else 0
+        confirmed_high = high_cnt if confirmed_count > 0 else 0
+        if confirmed_critical > 0 or score < 45:
             return "Rejected"
-        elif high_cnt > 0 or score < 65:
+        elif confirmed_high > 0 or score < 65:
             return "Requires Repair"
-        elif medium_cnt > 0 or total_defects > 0 or score < 88:
+        elif medium_cnt > 0 or score < 88:
             return "Accepted With Repair"
         else:
             return "Accepted"
 
-    def _determine_overall_severity(self, critical_cnt, high_cnt, medium_cnt, defective_area_pct):
+    def _determine_overall_severity(self, critical_cnt, high_cnt, medium_cnt, defective_area_pct, confirmed_count=0):
+        if confirmed_count == 0:
+            return "Low"
         if critical_cnt >= 1 or defective_area_pct > 20:
             return "Critical"
         elif high_cnt >= 1 or defective_area_pct > 10:
@@ -625,77 +923,116 @@ class WeldDetector(BaseDetector):
         else:
             return "Low"
 
-    def _determine_overall_repair_priority(self, critical_cnt, high_cnt, medium_cnt, defects):
-        if critical_cnt > 0:
+    def _determine_overall_repair_priority(self, critical_cnt, high_cnt, medium_cnt, defects, confirmed_count=0):
+        if confirmed_count == 0:
+            if any(d.get("confidence", 0.0) >= 0.10 for d in defects):
+                return "Verification Required"
+            return "Manual Verification Recommended"
+
+        confirmed_defs = [d for d in defects if d.get("confidence", 0.0) >= 0.20]
+        if any(d["severity"] == "Critical" for d in confirmed_defs):
             return "Immediate Repair"
-        elif high_cnt > 0:
+        elif any(d["severity"] == "High" for d in confirmed_defs):
             return "Repair Before Use"
-        elif any(d["type"] in ("Excess Reinforcement", "Porosity") for d in defects):
+        elif any(d["type"] in ("Excess Reinforcement", "Porosity") for d in confirmed_defs):
             return "Grind / Blend Flush"
-        elif any("spatter" in d["type"].lower() for d in defects):
+        elif any("spatter" in d["type"].lower() for d in confirmed_defs):
             return "Chisel / De-Spatter"
-        elif medium_cnt > 0:
+        elif any(d["severity"] == "Medium" for d in confirmed_defs):
             return "Repair / Clean Before Service"
         else:
             return "No Action Required"
 
-    def _generate_weld_conclusion(self, defects, breakdown, acceptance_status, critical_cnt, high_cnt):
+    def _generate_weld_conclusion(self, defects, active_breakdown, acceptance_status, critical_cnt, high_cnt,
+                                  confirmed_count=0, review_count=0, possible_count=0):
         """
-        Dynamically constructs clear engineering conclusion mentioning all detected defect types and counts.
+        Dynamically constructs clear engineering conclusion mentioning ONLY actual detected defect types and counts.
+        Never mentions un-detected defect classes.
         """
         parts = []
-        for def_type, count in breakdown.items():
+        for def_type, count in active_breakdown.items():
             if def_type != "Good Welding":
-                parts.append(f"{count} {def_type}")
-        
-        defect_summary_str = ", ".join(parts) if parts else "no active defects"
+                parts.append(f"{count} {def_type.lower()}")
 
-        if acceptance_status == "Rejected":
-            return (
-                f"Inspection identified {defect_summary_str} indication(s). "
-                f"Due to the presence of critical structural defects ({'including Crack/Bad Welding' if critical_cnt > 0 else 'high density defects'}), "
-                f"the weld is classified as Rejected and requires immediate engineering review and corrective action prior to service."
-            )
-        elif acceptance_status in ("Requires Repair", "Requires Rewelding"):
-            return (
-                f"Inspection identified {defect_summary_str} indication(s). "
-                f"The weld joint requires repair and re-welding in the designated defect zones before final structural sign-off."
-            )
-        elif acceptance_status == "Accepted With Repair":
-            return (
-                f"Inspection identified {defect_summary_str} indication(s). "
-                f"The weld is classified as Accepted With Repair, requiring surface cleaning, de-spattering, or weld toe dressing."
-            )
-        else:
+        defect_summary_str = " and ".join(parts) if len(parts) <= 2 else ", ".join(parts[:-1]) + f", and {parts[-1]}"
+        if not parts:
+            defect_summary_str = "zero active defect"
+
+        if not defects:
             return "Inspection verified sound weld bead geometry conforming to AWS D1.1 / ISO 5817 visual acceptance criteria. Status: Accepted."
 
-    def _generate_quality_explanation(self, score, status, severity, defects, breakdown):
-        defect_list_str = ", ".join([f"{k} ({v})" for k, v in breakdown.items() if k != "Good Welding"])
+        conclusion_parts = [f"Inspection identified {defect_summary_str} indication(s)."]
+
+        if confirmed_count > 0:
+            confirmed_types = list(dict.fromkeys(d["type"] for d in defects if d.get("confidence", 0.0) >= 0.20))
+            conf_str = f"{confirmed_count} indication(s) ({', '.join(confirmed_types).lower()}) meet the confirmed-defect confidence threshold"
+            if review_count + possible_count > 0:
+                conclusion_parts.append(f"{conf_str}, while the remaining {review_count + possible_count} indication(s) require verification.")
+            else:
+                conclusion_parts.append(f"{conf_str}.")
+        else:
+            conclusion_parts.append("All detected indications are below the confirmed-defect threshold and require manual or NDT verification before concluding defect status.")
+
+        if acceptance_status == "Rejected":
+            actual_crits = [d["type"] for d in defects if d["severity"] == "Critical" and d.get("confidence", 0.0) >= 0.20]
+            crit_detail = f"critical structural defect ({', '.join(set(actual_crits))})" if actual_crits else "severe defect accumulation"
+            conclusion_parts.append(f"Due to the presence of confirmed {crit_detail}, the joint is classified as Rejected and requires immediate engineering review.")
+        elif acceptance_status == "Requires Repair":
+            conclusion_parts.append("Repair and re-inspection are required for the confirmed defect zones prior to service acceptance.")
+        elif acceptance_status == "Accepted With Repair":
+            conclusion_parts.append("The weld is classified as Accepted With Repair, requiring designated surface dressing or rework.")
+        elif acceptance_status in ("Review Required", "Verification Required"):
+            conclusion_parts.append("Weld disposition is pending physical verification of the indicated regions.")
+        else:
+            conclusion_parts.append("Weld bead exhibits acceptable structural integrity.")
+
+        return " ".join(conclusion_parts)
+
+    def _generate_quality_explanation(self, score, status, severity, defects, active_breakdown,
+                                      confirmed_count=0, review_count=0, possible_count=0):
+        active_items = [f"{k} ({v})" for k, v in active_breakdown.items() if k != "Good Welding"]
+        defect_list_str = ", ".join(active_items) if active_items else "None"
         if not defects:
-            return f"A quality score of {score}/100 and status of '{status}' was assigned because zero structural defects or surface irregularities were detected."
+            return f"A quality score of {score}/100 and status of '{status}' was assigned because zero active defect indications were detected."
+
         return (
-            f"A quality score of {score}/100 and overall severity of '{severity}' was assigned based on {len(defects)} detected defect indication(s): "
-            f"{defect_list_str}. Each defect contributed to the score reduction based on its classification, affected area, and AWS D1.1 severity weighting."
+            f"A quality score of {score}/100 and overall status of '{status}' was assigned based on {len(defects)} indication(s): "
+            f"{defect_list_str} ({confirmed_count} confirmed defect(s), {review_count} review required, {possible_count} possible indication(s)). "
+            f"Scoring is weighted by confidence tier and AWS D1.1 severity criteria without penalizing benign or tentative indications."
         )
 
-    def _generate_weld_verdict(self, defects, dam_pct, score, acceptance, dominant_type):
-        def_types = list(dict.fromkeys(d["type"] for d in defects))
-        types_str = ", ".join(def_types[:4])
+    def _generate_weld_verdict(self, defects, dam_pct, score, acceptance, dominant_type, confirmed_count=0):
+        if not defects:
+            return "No visual defects detected. Weld conforms to visual inspection criteria."
+
+        actual_types = list(dict.fromkeys(d["type"] for d in defects))
+        types_str = ", ".join(actual_types[:4])
+
+        if confirmed_count == 0:
+            return (
+                f"The inspected weld contains {len(defects)} tentative indication(s) ({types_str}) pending verification. "
+                f"Weld Quality Score is {score}/100 with an overall status of '{acceptance}'. "
+                f"Visual verification is recommended before repair."
+            )
+
+        repair_str = "Immediate repair is required prior to load service." if acceptance == "Rejected" else (
+            "Repair is required prior to final acceptance." if acceptance == "Requires Repair" else
+            "The weld is acceptable with minor scheduled repair recommended."
+        )
         return (
-            f"The inspected weld contains {len(defects)} visible defect(s) including {types_str}. "
-            f"The total estimated defective area is approximately {dam_pct}%. "
+            f"The inspected weld contains {len(defects)} defect indication(s) including {types_str}. "
+            f"Estimated defective area is {dam_pct}%. "
             f"Weld Quality Score is {score}/100 with an overall status of '{acceptance}'. "
-            f"{'Immediate repair is required prior to load service.' if acceptance in ('Rejected', 'Requires Repair') else 'The weld is acceptable with minor scheduled repair recommended.'}"
+            f"{repair_str}"
         )
 
     def _clean_weld_result(self, img_bgr, w, h, filename, inspection_id, inspection_date, inspection_time, inspection_timestamp, good_welding_count=0, detected_classes_count=None):
         verdict = ("Trained YOLO11 model verified sound weld bead geometry, uniform ripple pattern, and complete fusion coalescence. Zero visual defects detected."
                    if good_welding_count > 0 else
                    "No visual surface defects detected. Weld bead profile conforms to AWS D1.1 / ISO 5817 visual acceptance criteria.")
-        
-        breakdown = {}
-        if good_welding_count > 0:
-            breakdown["Good Welding"] = good_welding_count
+
+        detected_classes = {"Good Welding": good_welding_count} if good_welding_count > 0 else {}
+        active_breakdown = {}
 
         return {
             "original_image":       self._cv2_to_b64(img_bgr),
@@ -710,8 +1047,16 @@ class WeldDetector(BaseDetector):
             "model_type":           "Instance Segmentation & Defect Analysis",
             "inspection_status":    "Complete",
             "total_defects":        0,
+            "total_active_defects": 0,
+            "total_model_detections": good_welding_count,
+            "confirmed_defects_count": 0,
+            "review_required_count": 0,
+            "possible_indications_count": 0,
+            "good_welding_count":   good_welding_count,
+            "detected_classes":     detected_classes,
+            "active_defects_breakdown": active_breakdown,
             "defects":              [],
-            "breakdown":            breakdown,
+            "breakdown":            detected_classes,
             "problem_analysis":     [],
             "quality_assessment": {
                 "score":                98,
@@ -721,8 +1066,16 @@ class WeldDetector(BaseDetector):
             },
             "conclusion":           "Inspection verified sound weld bead geometry conforming to AWS D1.1 / ISO 5817 visual acceptance criteria with zero active defects detected. Status: Excellent / Accepted.",
             "summary": {
+                "total_model_detections": good_welding_count,
                 "total_defects":        0,
-                "breakdown":            breakdown,
+                "total_active_defects": 0,
+                "confirmed_defects":    0,
+                "review_required":      0,
+                "possible_indications": 0,
+                "good_welding_detections": good_welding_count,
+                "detected_classes":     detected_classes,
+                "active_defects":       active_breakdown,
+                "breakdown":            detected_classes,
                 "critical_defects":     0,
                 "major_defects":        0,
                 "minor_defects":        0,
@@ -732,6 +1085,7 @@ class WeldDetector(BaseDetector):
                 "weld_coverage_percent": 100.0,
                 "defective_area_percent": 0.0,
                 "inspection_confidence": 98.5,
+                "overall_detection_confidence": 98.5,
             },
             "weld_quality": {
                 "score":                98,
@@ -751,6 +1105,7 @@ class WeldDetector(BaseDetector):
             "dominant_type": "None", "largest_defect": "None",
             "verdict": verdict,
             "inspection_confidence": 98.5,
+            "overall_detection_confidence": 98.5,
         }
 
     # ── Non-Overlapping CAD Engineering Leader-Line Renderer ────────────────
