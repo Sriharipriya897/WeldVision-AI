@@ -260,7 +260,7 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
                 </span>
               </div>
               <p className="text-xs text-slate-500 font-medium mt-0.5">
-                AWS D1.1 / ISO 5817 Quality Assurance  ·  {defects.length > 0 ? `${defects.length} defect(s) detected` : 'Conforming Sound Weld'}
+                AI Visual Screening (AWS D1.1 Reference Criteria)  ·  {defects.length > 0 ? `${defects.length} defect indication(s) detected` : 'No Target Defect Detected'}
               </p>
             </div>
           </div>
@@ -511,40 +511,49 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
 
         {/* ── MODEL EVALUATION METRICS (BENCHMARK TEST DATASET) ── */}
         <div className="mb-6 pt-4 border-t border-slate-200">
-          <div className="flex items-center justify-between mb-2.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-2.5 gap-1">
             <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
               <Shield className="w-3.5 h-3.5 text-slate-400" />
-              Model Evaluation Metrics
+              Model Evaluation Metrics (YOLO11n-seg · 40 Epochs)
             </h4>
             <span className="text-[10px] text-slate-400 font-medium">
-              Validated on YOLO11 benchmark dataset · Strictly separate from current specimen inspection
+              Tesla T4 Validation · Strictly separate from current specimen inspection
             </span>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3 rounded-xl border border-slate-200 bg-slate-50/80 text-center">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Precision</p>
-              <p className="text-xl font-black text-slate-800 mt-0.5">88.4%</p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Precision (Box / Mask)</p>
+              <p className="text-xl font-black text-slate-800 mt-0.5">24.8% / 23.7%</p>
               <p className="text-[9px] text-slate-400 mt-0.5">Test Dataset Validation</p>
             </div>
 
             <div className="p-3 rounded-xl border border-slate-200 bg-slate-50/80 text-center">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Recall</p>
-              <p className="text-xl font-black text-slate-800 mt-0.5">85.2%</p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Recall (Box / Mask)</p>
+              <p className="text-xl font-black text-slate-800 mt-0.5">27.9% / 25.3%</p>
               <p className="text-[9px] text-slate-400 mt-0.5">Test Dataset Validation</p>
             </div>
 
             <div className="p-3 rounded-xl border border-slate-200 bg-slate-50/80 text-center">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">mAP50</p>
-              <p className="text-xl font-black text-slate-800 mt-0.5">89.1%</p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">mAP50 (Box / Mask)</p>
+              <p className="text-xl font-black text-slate-800 mt-0.5">20.8% / 18.4%</p>
               <p className="text-[9px] text-slate-400 mt-0.5">IoU @ 0.50</p>
             </div>
 
             <div className="p-3 rounded-xl border border-slate-200 bg-slate-50/80 text-center">
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">mAP50-95</p>
-              <p className="text-xl font-black text-slate-800 mt-0.5">72.6%</p>
-              <p className="text-[9px] text-slate-400 mt-0.5">IoU @ 0.50:0.95</p>
+              <p className="text-xl font-black text-slate-800 mt-0.5">13.0% / 9.7%</p>
+              <p className="text-[9px] text-slate-400 mt-0.5">Box / Mask (0.50:0.95)</p>
             </div>
+          </div>
+
+          <div className="mt-2.5 p-2 rounded-lg bg-orange-50/50 border border-orange-100 text-[10px] text-orange-800 flex flex-wrap items-center justify-between gap-1">
+            <span className="font-bold text-orange-900">Strongest Learned Classes:</span>
+            <span>Porosity mAP50: <strong className="font-semibold text-orange-950">64.8%</strong></span>
+            <span>·</span>
+            <span>Spatter mAP50: <strong className="font-semibold text-orange-950">34.9%</strong></span>
+            <span>·</span>
+            <span>Excessive Weld Reinforcement mAP50: <strong className="font-semibold text-orange-950">4.3%</strong></span>
           </div>
         </div>
 
@@ -592,8 +601,8 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
                 </span>
               ) : (
                 Object.entries(activeDefectsBreakdown).map(([defType, count]) => {
-                  const isCrit = ["Crack", "Bad Welding", "Lack of Penetration"].includes(defType);
-                  const isHigh = ["Porosity", "Undercut", "Lack of Fusion"].includes(defType);
+                  const isCrit = ["Incomplete Fusion", "Incomplete Penetration"].includes(defType);
+                  const isHigh = ["Slag Inclusion", "Undercut", "Porosity", "Underfill", "Excessive Concavity", "Excessive Penetration"].includes(defType);
                   const bgClass = isCrit
                     ? 'bg-red-50 text-red-700 border-red-200'
                     : isHigh
@@ -632,15 +641,15 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
         {defects.length === 0 ? (
           <div className="p-5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-medium flex items-center gap-3">
             <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-            <span>No critical or active welding defects were detected. Weld bead exhibits uniform geometry and sound fusion conforming to AWS D1.1 criteria.</span>
+            <span>No target welding defect indications were detected by AI visual screening. Manual CWI verification recommended for final acceptance.</span>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {defects.map((d, i) => {
               const defNum = d.id_num || i + 1;
               const sc = SEV[d.severity] || SEV.Medium;
-              const isPossible = (d.confidence || 0) < 0.10;
-              const isReview = (d.confidence || 0) >= 0.10 && (d.confidence || 0) < 0.20;
+              const isPossible = (d.confidence || 0) < 0.30;
+              const isReview = (d.confidence || 0) >= 0.30 && (d.confidence || 0) < 0.50;
               return (
                 <div
                   key={d.id || defNum}
@@ -652,17 +661,17 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
                       <span className="font-mono font-black text-xs text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
                         DEFECT #{defNum}
                       </span>
-                      <strong className="text-slate-900 text-sm">{d.type}</strong>
+                      <strong className="text-slate-900 text-sm">{d.class_name || d.type}</strong>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${
-                        d.confidence >= 0.20
+                        (d.confidence_tier === 'Confirmed Defect' || d.confidence >= 0.50)
                           ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : d.confidence >= 0.10
+                          : (d.confidence_tier === 'Review Required' || d.confidence >= 0.30)
                           ? 'bg-blue-50 text-blue-700 border-blue-200'
                           : 'bg-amber-50 text-amber-700 border-amber-200'
                       }`}>
-                        {d.confidence_tier || (d.confidence >= 0.20 ? 'Confirmed Defect' : d.confidence >= 0.10 ? 'Review Required' : 'Possible Indication')}
+                        {d.confidence_tier || (d.confidence >= 0.50 ? 'Confirmed Defect' : d.confidence >= 0.30 ? 'Review Required' : 'Possible Indication')}
                       </span>
                       <SeverityBadge value={d.severity} size="xs" />
                     </div>
@@ -780,7 +789,7 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
                         <td className="py-3.5 px-4 font-black text-slate-900 font-mono">
                           DEFECT #{d.id_num || i + 1}
                         </td>
-                        <td className="py-3.5 px-4 font-bold text-slate-900">{d.type || d.defect_name}</td>
+                        <td className="py-3.5 px-4 font-bold text-slate-900">{d.class_name || d.type || d.defect_name}</td>
                         <td className="py-3.5 px-4">
                           <SeverityBadge value={d.severity} />
                         </td>
@@ -788,8 +797,8 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
                           <span className="font-bold text-slate-800">{Math.round((d.confidence || 0) * 100)}%</span>
                           {d.confidence_tier && (
                             <span className={`ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-semibold ${
-                              d.confidence >= 0.20 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
-                              d.confidence >= 0.10 ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+                              (d.confidence_tier === 'Confirmed Defect' || d.confidence >= 0.50) ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                              (d.confidence_tier === 'Review Required' || d.confidence >= 0.30) ? 'bg-blue-50 text-blue-700 border border-blue-200' :
                               'bg-amber-50 text-amber-700 border border-amber-200'
                             }`}>
                               {d.confidence_tier}

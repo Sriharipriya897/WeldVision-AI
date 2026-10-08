@@ -1,4 +1,5 @@
 import os
+import sys
 import io
 import datetime
 from pathlib import Path
@@ -7,8 +8,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from detector import WeldDetector, CorrosionDetector
-from pdf_generator import generate_pdf_report
+# Ensure backend directory is in sys.path
+BACKEND_DIR = Path(__file__).resolve().parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+try:
+    from detector import WeldDetector, CorrosionDetector
+    from pdf_generator import generate_pdf_report
+except ImportError:
+    from backend.detector import WeldDetector, CorrosionDetector
+    from backend.pdf_generator import generate_pdf_report
 
 app = FastAPI(
     title="WeldVision AI Backend API",
