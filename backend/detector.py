@@ -383,7 +383,7 @@ class WeldDetector(BaseDetector):
         # Run real YOLO11 Segmentation inference with balanced confidence and NMS settings
         results = self.model.predict(
             img_bgr,
-            conf=0.25,
+            conf=0.30,
             iou=0.45,
             max_det=50,
             imgsz=640,
@@ -403,6 +403,8 @@ class WeldDetector(BaseDetector):
             for i in range(len(boxes)):
                 cls_id = int(boxes.cls[i].item())
                 conf = float(boxes.conf[i].item())
+                if conf < 0.30:
+                    continue
                 cls_name = self.model.names.get(cls_id, f"Defect_{cls_id}")
 
                 # Track detection counts
@@ -434,24 +436,15 @@ class WeldDetector(BaseDetector):
                     continue
 
                 # Determine Confidence Tier
-                # >= 50% -> Confirmed Defect
-                # 30% - 49.99% -> Review Required
-                # < 30% -> Possible Indication
                 if conf >= 0.50:
                     conf_tier = "Confirmed Defect"
                     status_note = "High Confidence"
-                elif conf >= 0.30:
+                else:
                     conf_tier = "Review Required"
                     status_note = "Medium Confidence"
-                else:
-                    conf_tier = "Possible Indication"
-                    status_note = "Low Confidence (Tentative)"
 
                 # Severity assignment
-                if conf < 0.30 and cls_name in ("Incomplete Fusion", "Incomplete Penetration"):
-                    sev = "Medium"
-                else:
-                    sev = CLASS_SEVERITY_MAP.get(cls_name, "Medium")
+                sev = CLASS_SEVERITY_MAP.get(cls_name, "Medium")
 
                 d_dict = self._build_defect_dict(
                     cid=cls_id,
@@ -728,7 +721,8 @@ class WeldDetector(BaseDetector):
                 "possible_causes":      possible_causes,
                 "recommended_actions":  recommended_actions,
             },
-            # Flat compatibility fields
+            "twelve_class_inspection": self._build_12_class_inspection(defects),
+            "total_detected_indications": total_active_defects,
             "critical_count":       critical_count,
             "high_count":           high_count,
             "medium_count":         medium_count,
@@ -746,6 +740,174 @@ class WeldDetector(BaseDetector):
         }
 
     # ── Helpers & Generators ────────────────────────────────────────────
+
+    def _build_12_class_inspection(self, defects: list) -> list:
+        """
+        Builds complete 12-class inspection result cards.
+        Always displays all 12 target defect classes.
+        Genuine YOLO predictions are populated for actually detected classes.
+        Non-detected classes are marked with honest visual screening statuses.
+        """
+        alias_map = {
+            "Excess Reinforcement": "Excessive Weld Reinforcement",
+            "Spatters": "Spatter",
+            "Lack of Fusion": "Incomplete Fusion",
+            "Lack of Penetration": "Incomplete Penetration"
+        }
+
+        dets_by_class = {}
+        for d in defects:
+            raw_cname = d.get("class_name", d.get("type", ""))
+            cname = alias_map.get(raw_cname, raw_cname)
+            if cname not in dets_by_class:
+                dets_by_class[cname] = []
+            dets_by_class[cname].append(d)
+
+        target_classes_config = [
+            {
+                "class_name": "Slag Inclusion",
+                "status_type": "not_detected",
+                "default_status": "No visible indication detected",
+                "explanation": "Slag inclusion refers to non-metallic material trapped within the weld metal.",
+                "recommendation": "No clear surface indication identified in the uploaded image. Further NDT may be required for internal verification."
+            },
+            {
+                "class_name": "Undercut",
+                "status_type": "not_detected",
+                "default_status": "No visible indication detected",
+                "explanation": "Undercut is a groove melted into the base metal near the weld toe or root and left insufficiently filled.",
+                "recommendation": "No clear undercut indication identified in the available image."
+            },
+            {
+                "class_name": "Porosity",
+                "status_type": "not_detected",
+                "default_status": "No visible indication detected",
+                "explanation": "Porosity refers to gas cavities or pinhole-like voids within the weld metal.",
+                "recommendation": "No clear porosity indication identified in the uploaded image."
+            },
+            {
+                "class_name": "Incomplete Fusion",
+                "status_type": "not_detected",
+                "default_status": "No visible indication detected",
+                "explanation": "Incomplete fusion occurs when weld metal does not properly fuse with the base metal or an adjacent weld pass.",
+                "recommendation": "No clear visible indication identified. Internal verification may be required."
+            },
+            {
+                "class_name": "Overlap",
+                "status_type": "not_detected",
+                "default_status": "No visible indication detected",
+                "explanation": "Overlap occurs when weld metal extends beyond the weld toe or root without proper fusion.",
+                "recommendation": "No clear overlap indication identified in the available image."
+            },
+            {
+                "class_name": "Underfill",
+                "status_type": "not_detected",
+                "default_status": "No visible indication detected",
+                "explanation": "Underfill occurs when the weld face or root surface remains below the adjacent base-metal surface.",
+                "recommendation": "Profile inspection recommended if the weld geometry is unclear."
+            },
+            {
+                "class_name": "Spatter",
+                "status_type": "not_detected",
+                "default_status": "No visible indication detected",
+                "explanation": "Spatter consists of unwanted droplets of molten weld metal deposited around the weld.",
+                "recommendation": "No significant spatter indication identified."
+            },
+            {
+                "class_name": "Excessive Convexity",
+                "status_type": "verification",
+                "default_status": "Profile Inspection Required",
+                "explanation": "Excessive convexity refers to an excessively bulged weld profile or excessive weld metal buildup.",
+                "recommendation": "Verify weld profile and reinforcement dimensions."
+            },
+            {
+                "class_name": "Excessive Concavity",
+                "status_type": "verification",
+                "default_status": "Profile Inspection Required",
+                "explanation": "Excessive concavity refers to an excessively hollow or depressed weld profile.",
+                "recommendation": "Verify weld geometry and effective throat/profile dimensions."
+            },
+            {
+                "class_name": "Excessive Weld Reinforcement",
+                "status_type": "not_detected",
+                "default_status": "No clear excessive reinforcement indication detected",
+                "explanation": "Excessive weld reinforcement occurs when weld metal extends beyond the required weld profile.",
+                "recommendation": "Verify reinforcement height against the applicable welding specification."
+            },
+            {
+                "class_name": "Incomplete Penetration",
+                "status_type": "verification",
+                "default_status": "Root-Side Verification Required",
+                "explanation": "Incomplete penetration occurs when the weld does not achieve the required penetration through the joint root.",
+                "recommendation": "Root-side inspection or suitable NDT is recommended. Do not claim confirmation from a surface image alone."
+            },
+            {
+                "class_name": "Excessive Penetration",
+                "status_type": "verification",
+                "default_status": "Root Profile Verification Required",
+                "explanation": "Excessive penetration occurs when weld metal extends through the root beyond the required amount.",
+                "recommendation": "Verify the root profile using appropriate visual/root-side inspection or NDT."
+            }
+        ]
+
+        twelve_cards = []
+        for target in target_classes_config:
+            cname = target["class_name"]
+            if cname in dets_by_class and len(dets_by_class[cname]) > 0:
+                class_dets = dets_by_class[cname]
+                top_det = max(class_dets, key=lambda d: d.get("confidence", 0.0))
+                conf_val = top_det.get("confidence", 0.0)
+                conf_pct = int(round(conf_val * 100))
+                
+                if conf_val >= 0.50:
+                    status_str = "DETECTED"
+                    sev_tier = top_det.get("severity", CLASS_SEVERITY_MAP.get(cname, "High"))
+                else:
+                    status_str = "DETECTED (Review Required)"
+                    sev_tier = "Review Required"
+
+                obs = top_det.get("observation") or f"Localized {cname.lower()} indications identified in the weld region."
+                causes = top_det.get("possible_cause") or WELD_DEFECT_METADATA.get(cname, {}).get("possible_cause", "Welding parameters or atmospheric conditions.")
+                rec = top_det.get("recommended_action") or "Visually verify the indicated region and perform NDT when required."
+
+                card = {
+                    "class_name": cname,
+                    "category": "detected",
+                    "status_type": "detected",
+                    "status": status_str,
+                    "confidence": conf_pct,
+                    "confidence_raw": conf_val,
+                    "count": len(class_dets),
+                    "severity": sev_tier,
+                    "location": top_det.get("location", top_det.get("region", "Weld region")),
+                    "observation": _clean_svg_text(obs),
+                    "explanation": target["explanation"],
+                    "possible_causes": _clean_svg_text(causes),
+                    "recommendation": _clean_svg_text(rec),
+                    "bbox": top_det.get("bbox"),
+                    "detections": class_dets
+                }
+            else:
+                card = {
+                    "class_name": cname,
+                    "category": target["status_type"],
+                    "status_type": target["status_type"],
+                    "status": target["default_status"],
+                    "confidence": None,
+                    "confidence_raw": None,
+                    "count": 0,
+                    "severity": CLASS_SEVERITY_MAP.get(cname, "Low"),
+                    "location": None,
+                    "observation": None,
+                    "explanation": target["explanation"],
+                    "possible_causes": None,
+                    "recommendation": target["recommendation"],
+                    "bbox": None,
+                    "detections": []
+                }
+            twelve_cards.append(card)
+
+        return twelve_cards
 
     def _build_defect_dict(self, cid, dtype, sev, x, y, cw, ch, pct, conf, img_w, img_h, mask_pts=None):
         cx, cy = int(x + cw // 2), int(y + ch // 2)
@@ -1259,6 +1421,8 @@ class WeldDetector(BaseDetector):
                 "possible_causes":      ["Optimal welding heat input, travel speed, and gas shielding."],
                 "recommended_actions":  ["Proceed to next inspection/production phase; visual screening clear."],
             },
+            "twelve_class_inspection": self._build_12_class_inspection([]),
+            "total_detected_indications": 0,
             "critical_count": 0, "high_count": 0, "medium_count": 0, "low_count": 0,
             "damaged_pct": 0.0, "health_score": 98, "condition": "No Target Defect Detected", "overall_risk": "Low",
             "dominant_type": "None", "largest_defect": "None",

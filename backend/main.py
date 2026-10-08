@@ -70,7 +70,7 @@ async def inspect_image(file: UploadFile = File(...)):
     Analyzes weld defects (Crack, Porosity, Undercut, Overlap, Lack of Fusion, Lack of Penetration, Slag Inclusion, Burn Through, etc.).
     Returns engineering annotation with non-overlapping callout arrows, weld quality score, acceptance status, and defect breakdown.
     """
-    if not file.content_type.startswith("image/"):
+    if file.content_type and not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image file (PNG, JPG, JPEG, WEBP).")
     
     try:

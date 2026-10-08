@@ -5,7 +5,7 @@ import {
   Activity, Target, Shield, Wrench, BookOpen,
   AlertCircle, BarChart3, MapPin, Hash,
   Crosshair, FileText, Check, Calendar, Clock,
-  Cpu, FileCheck, HelpCircle
+  Cpu, FileCheck, HelpCircle, Search, AlertOctagon, CheckCircle
 } from 'lucide-react';
 
 // ─── Severity Color & Label Config ─────────────────────────────────────────
@@ -14,6 +14,7 @@ const SEV = {
   High:     { bg: '#FFF7ED', text: '#EA580C', border: '#FDBA74', dot: '#EA580C', label: 'High'     },
   Medium:   { bg: '#FFFBEB', text: '#D97706', border: '#FCD34D', dot: '#D97706', label: 'Medium'   },
   Low:      { bg: '#ECFDF5', text: '#059669', border: '#6EE7B7', dot: '#059669', label: 'Low'      },
+  "Review Required": { bg: '#FFF7ED', text: '#EA580C', border: '#FDBA74', dot: '#EA580C', label: 'Review Required' },
 };
 
 const STATUS_BADGES = {
@@ -23,15 +24,111 @@ const STATUS_BADGES = {
   "Requires Repair":      { bg: '#FFF7ED', text: '#C2410C', border: '#F97316', icon: AlertCircle },
   "Requires Rewelding":   { bg: '#FFF7ED', text: '#C2410C', border: '#F97316', icon: AlertCircle },
   "Rejected":             { bg: '#FEF2F2', text: '#B91C1C', border: '#EF4444', icon: ShieldAlert },
+  "No Target Defect Detected": { bg: '#ECFDF5', text: '#047857', border: '#10B981', icon: CheckCircle2 },
 };
 
-// ─── Reusable Primitives ──────────────────────────────────────────────────
+// Default 12 target class definitions for robust fallback
+const DEFAULT_12_CLASSES = [
+  {
+    class_name: "Slag Inclusion",
+    status_type: "not_detected",
+    default_status: "No visible indication detected",
+    explanation: "Slag inclusion refers to non-metallic material trapped within the weld metal.",
+    recommendation: "No clear surface indication identified in the uploaded image. Further NDT may be required for internal verification."
+  },
+  {
+    class_name: "Undercut",
+    status_type: "not_detected",
+    default_status: "No visible indication detected",
+    explanation: "Undercut is a groove melted into the base metal near the weld toe or root and left insufficiently filled.",
+    recommendation: "No clear undercut indication identified in the available image."
+  },
+  {
+    class_name: "Porosity",
+    status_type: "not_detected",
+    default_status: "No visible indication detected",
+    explanation: "Porosity refers to gas cavities or pinhole-like voids within the weld metal.",
+    recommendation: "No clear porosity indication identified in the uploaded image."
+  },
+  {
+    class_name: "Incomplete Fusion",
+    status_type: "not_detected",
+    default_status: "No visible indication detected",
+    explanation: "Incomplete fusion occurs when weld metal does not properly fuse with the base metal or an adjacent weld pass.",
+    recommendation: "No clear visible indication identified. Internal verification may be required."
+  },
+  {
+    class_name: "Overlap",
+    status_type: "not_detected",
+    default_status: "No visible indication detected",
+    explanation: "Overlap occurs when weld metal extends beyond the weld toe or root without proper fusion.",
+    recommendation: "No clear overlap indication identified in the available image."
+  },
+  {
+    class_name: "Underfill",
+    status_type: "not_detected",
+    default_status: "No visible indication detected",
+    explanation: "Underfill occurs when the weld face or root surface remains below the adjacent base-metal surface.",
+    recommendation: "Profile inspection recommended if the weld geometry is unclear."
+  },
+  {
+    class_name: "Spatter",
+    status_type: "not_detected",
+    default_status: "No visible indication detected",
+    explanation: "Spatter consists of unwanted droplets of molten weld metal deposited around the weld.",
+    recommendation: "No significant spatter indication identified."
+  },
+  {
+    class_name: "Excessive Convexity",
+    status_type: "verification",
+    default_status: "Profile Inspection Required",
+    explanation: "Excessive convexity refers to an excessively bulged weld profile or excessive weld metal buildup.",
+    recommendation: "Verify weld profile and reinforcement dimensions."
+  },
+  {
+    class_name: "Excessive Concavity",
+    status_type: "verification",
+    default_status: "Profile Inspection Required",
+    explanation: "Excessive concavity refers to an excessively hollow or depressed weld profile.",
+    recommendation: "Verify weld geometry and effective throat/profile dimensions."
+  },
+  {
+    class_name: "Excessive Weld Reinforcement",
+    status_type: "not_detected",
+    default_status: "No clear excessive reinforcement indication detected",
+    explanation: "Excessive weld reinforcement occurs when weld metal extends beyond the required weld profile.",
+    recommendation: "Verify reinforcement height against the applicable welding specification."
+  },
+  {
+    class_name: "Incomplete Penetration",
+    status_type: "verification",
+    default_status: "Root-Side Verification Required",
+    explanation: "Incomplete penetration occurs when the weld does not achieve the required penetration through the joint root.",
+    recommendation: "Root-side inspection or suitable NDT is recommended. Do not claim confirmation from a surface image alone."
+  },
+  {
+    class_name: "Excessive Penetration",
+    status_type: "verification",
+    default_status: "Root Profile Verification Required",
+    explanation: "Excessive penetration occurs when weld metal extends through the root beyond the required amount.",
+    recommendation: "Verify the root profile using appropriate visual/root-side inspection or NDT."
+  }
+];
+
+function cleanText(val) {
+  if (!val) return '';
+  let s = String(val);
+  s = s.replace(/^svg[-_ ]*/gi, '')
+       .replace(/^svg([A-Z])/i, '$1')
+       .replace(/\bsvg\b/gi, '')
+       .replace(/\s+/g, ' ')
+       .trim();
+  return s;
+}
+
 function Card({ children, className = '', style = {} }) {
   return (
-    <div
-      className={`bg-white rounded-2xl border border-slate-200 card-shadow ${className}`}
-      style={style}
-    >
+    <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${className}`} style={style}>
       {children}
     </div>
   );
@@ -41,31 +138,16 @@ function SectionTitle({ icon: Icon, label, right }) {
   return (
     <div className="flex items-center justify-between mb-4">
       <div className="flex items-center gap-2.5">
-        <div className="w-7 h-7 rounded-lg bg-orange-50 flex items-center justify-center">
+        <div className="w-8 h-8 rounded-xl bg-orange-50 flex items-center justify-center border border-orange-200/60">
           <Icon className="w-4 h-4 text-orange-600" />
         </div>
-        <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">{label}</h3>
+        <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider">{label}</h3>
       </div>
       {right && <div>{right}</div>}
     </div>
   );
 }
 
-function SeverityBadge({ value, size = 'sm' }) {
-  const s = SEV[value] || SEV.Medium;
-  const pad = size === 'xs' ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-xs';
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 ${pad} rounded-full font-bold border`}
-      style={{ background: s.bg, color: s.text, borderColor: s.border }}
-    >
-      <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: s.dot }} />
-      {s.label}
-    </span>
-  );
-}
-
-// ─── Weld Quality Score Ring ──────────────────────────────────────────────
 function ScoreRing({ score }) {
   const r = 54;
   const circ = 2 * Math.PI * r;
@@ -85,103 +167,15 @@ function ScoreRing({ score }) {
         />
       </svg>
       <div className="relative text-center">
-        <div className="text-3xl font-black num-display text-slate-900 leading-none">{score}</div>
+        <div className="text-3xl font-black text-slate-900 leading-none">{score}</div>
         <div className="text-xs font-semibold text-slate-400 mt-1">/ 100</div>
       </div>
     </div>
   );
 }
 
-// ─── Weld Quality Meter (Excellent / Accepted / Accepted With Repair / Rejected) ─────
-function WeldQualityMeter({ score }) {
-  const levels = [
-    { label: 'Rejected',              range: [0, 44],   color: '#EF4444' },
-    { label: 'Requires Repair',       range: [45, 64],  color: '#F97316' },
-    { label: 'Accepted With Repair',  range: [65, 79],  color: '#F59E0B' },
-    { label: 'Accepted',              range: [80, 89],  color: '#34D399' },
-    { label: 'Excellent',             range: [90, 100], color: '#10B981' },
-  ];
-  const active = levels.find(l => score >= l.range[0] && score <= l.range[1]) || levels[0];
-  return (
-    <div className="space-y-1.5">
-      <div className="flex gap-1 h-2.5 rounded-full overflow-hidden">
-        {levels.map(l => (
-          <div
-            key={l.label}
-            className="flex-1 rounded-sm transition-all duration-700"
-            style={{ background: l.label === active.label ? l.color : '#E2E8F0' }}
-          />
-        ))}
-      </div>
-      <div className="flex justify-between text-[9px] font-semibold text-slate-400">
-        {levels.map(l => (
-          <span
-            key={l.label}
-            style={{
-              color: l.label === active.label ? active.color : undefined,
-              fontWeight: l.label === active.label ? 800 : undefined
-            }}
-          >
-            {l.label}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── Defect Severity Meter (Low / Medium / High / Critical) ─────────────────
-function DefectSeverityMeter({ riskLabel }) {
-  const levels = [
-    { label: 'Low',      color: '#10B981' },
-    { label: 'Medium',   color: '#F59E0B' },
-    { label: 'High',     color: '#F97316' },
-    { label: 'Critical', color: '#EF4444' },
-  ];
-  const activeIdx = levels.findIndex(l => l.label.toLowerCase() === (riskLabel || 'low').toLowerCase());
-  return (
-    <div className="space-y-1.5">
-      <div className="flex gap-1 h-2.5 rounded-full overflow-hidden">
-        {levels.map((l, i) => (
-          <div
-            key={l.label}
-            className="flex-1 rounded-sm transition-all duration-500"
-            style={{ background: i <= activeIdx ? l.color : '#E2E8F0' }}
-          />
-        ))}
-      </div>
-      <div className="flex justify-between text-[9px] font-semibold text-slate-400">
-        {levels.map(l => (
-          <span
-            key={l.label}
-            style={{
-              color: l.label.toLowerCase() === (riskLabel || '').toLowerCase() ? '#1E293B' : undefined,
-              fontWeight: l.label.toLowerCase() === (riskLabel || '').toLowerCase() ? 800 : undefined
-            }}
-          >
-            {l.label}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-const cleanText = (val) => {
-  if (!val) return '';
-  let s = String(val);
-  s = s.replace(/^svg[-_ ]*/gi, '')
-       .replace(/^svg([A-Z])/i, '$1')
-       .replace(/\bsvg\b/gi, '')
-       .replace(/\s+/g, ' ')
-       .trim();
-  return s;
-};
-
-// ─── Main Result Component ────────────────────────────────────────────────────
 export default function Result({ result, onReset, isDownloadingPdf, onDownloadPdf }) {
-  const [activeTab, setActiveTab] = useState('annotated'); // 'original' | 'annotated' | 'overlay'
-  const [expandedId, setExpandedId] = useState(null);
+  const [activeTab, setActiveTab] = useState('annotated');
 
   if (!result) return null;
 
@@ -190,51 +184,76 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
   const weldQuality = result.weld_quality || {};
   const qa = result.quality_assessment || {};
 
-  const totalDefects = summary.total_defects ?? result.total_defects ?? defects.length;
-  const breakdown = summary.breakdown || result.breakdown || {};
-  const criticalCount = summary.critical_defects ?? result.critical_count ?? 0;
-  const majorCount = summary.major_defects ?? result.high_count ?? 0;
-  const minorCount = summary.minor_defects ?? result.medium_count ?? 0;
-
-  // Separate detection counts & breakdowns
-  const totalModelDetections = result.total_model_detections ?? (defects.length + (result.good_welding_count || 0));
-  const confirmedCount = result.confirmed_defects_count ?? defects.filter(d => (d.confidence || 0) >= 0.20).length;
-  const reviewRequiredCount = result.review_required_count ?? defects.filter(d => (d.confidence || 0) >= 0.10 && (d.confidence || 0) < 0.20).length;
-  const possibleIndicationsCount = result.possible_indications_count ?? defects.filter(d => (d.confidence || 0) < 0.10).length;
-  const goodWeldingCount = result.good_welding_count ?? summary.good_welding_detections ?? (breakdown["Good Welding"] || 0);
-  const activeDefectCount = result.total_active_defects ?? result.total_defects ?? defects.length;
-  const detectedClasses = result.detected_classes || breakdown;
-  const activeDefectsBreakdown = result.active_defects_breakdown || Object.fromEntries(Object.entries(breakdown).filter(([k]) => k !== "Good Welding"));
-
+  const totalDetectedIndications = result.total_detected_indications ?? defects.length;
   const score = qa.score ?? weldQuality.score ?? result.health_score ?? 98;
   const status = qa.status ?? weldQuality.overall_status ?? weldQuality.acceptance_status ?? result.acceptance_status ?? 'Accepted';
   const overallSeverity = qa.severity ?? weldQuality.overall_severity ?? weldQuality.overall_risk ?? result.overall_risk ?? 'Low';
-  const repairPriority = weldQuality.repair_priority || result.maintenance_status || 'No Action Required';
-
-  const coveragePct = summary.weld_coverage_percent ?? 98.5;
-  const defectiveAreaPct = summary.defective_area_percent ?? result.damaged_pct ?? 0.0;
-  const confidencePct = summary.inspection_confidence ?? result.inspection_confidence ?? 95.0;
-
-  // Deterministic Overall Detection Confidence calculated from actual detections in current specimen
-  const overallDetectionConf = result.overall_detection_confidence ?? summary.overall_detection_confidence ?? (
-    defects.length > 0
-      ? Math.round((defects.reduce((acc, d) => acc + (d.confidence || 0), 0) / defects.length) * 100)
-      : (goodWeldingCount > 0 ? 98 : 95)
-  );
-
-  const verdict = weldQuality.verdict || result.verdict || 'AI Inspection verdict generated.';
-  const conclusion = result.conclusion || weldQuality.conclusion || verdict;
-  const qaExplanation = qa.explanation || 'Dynamic quality score computed based on YOLO11 predictions.';
 
   const inspectionDate = result.inspection_date || new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
   const inspectionTime = result.inspection_time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const inspectionId = result.inspection_id || `WLD-${Date.now()}`;
   const fileName = result.file_name || 'weld_specimen.jpg';
-  const modelName = result.model_name || 'Ultralytics YOLO11-seg';
-  const modelType = result.model_type || 'Instance Segmentation & Defect Analysis';
 
   const statusCfg = STATUS_BADGES[status] || STATUS_BADGES["Accepted"];
   const StatusIcon = statusCfg.icon;
+
+  // Build or extract the 12-class inspection list
+  const twelveCards = result.twelve_class_inspection || (() => {
+    const aliasMap = {
+      "Excess Reinforcement": "Excessive Weld Reinforcement",
+      "Spatters": "Spatter",
+      "Lack of Fusion": "Incomplete Fusion",
+      "Lack of Penetration": "Incomplete Penetration"
+    };
+    const detsByClass = {};
+    for (const d of defects) {
+      const cname = aliasMap[d.type] || d.type || d.class_name;
+      if (!detsByClass[cname]) detsByClass[cname] = [];
+      detsByClass[cname].push(d);
+    }
+    return DEFAULT_12_CLASSES.map(target => {
+      const cname = target.class_name;
+      if (detsByClass[cname] && detsByClass[cname].length > 0) {
+        const classDets = detsByClass[cname];
+        const topDet = classDets.reduce((prev, curr) => (curr.confidence > prev.confidence ? curr : prev), classDets[0]);
+        const confVal = topDet.confidence || 0.0;
+        const confPct = Math.round(confVal * 100);
+        return {
+          class_name: cname,
+          category: 'detected',
+          status_type: 'detected',
+          status: confVal >= 0.50 ? 'DETECTED' : 'DETECTED (Review Required)',
+          confidence: confPct,
+          confidence_raw: confVal,
+          count: classDets.length,
+          severity: topDet.severity || (confVal >= 0.50 ? 'High' : 'Review Required'),
+          location: topDet.location || topDet.region || 'Weld region',
+          observation: cleanText(topDet.observation || `Localized ${cname.toLowerCase()} indications identified in the weld region.`),
+          explanation: target.explanation,
+          possible_causes: cleanText(topDet.possible_cause || 'Moisture, contamination, inadequate shielding or unstable welding conditions.'),
+          recommendation: cleanText(topDet.recommended_action || 'Visually verify the indicated region and perform NDT when required.'),
+          bbox: topDet.bbox,
+          detections: classDets
+        };
+      }
+      return {
+        class_name: cname,
+        category: target.status_type,
+        status_type: target.status_type,
+        status: target.default_status,
+        confidence: null,
+        count: 0,
+        severity: 'Low',
+        location: null,
+        observation: null,
+        explanation: target.explanation,
+        possible_causes: null,
+        recommendation: target.recommendation,
+        bbox: null,
+        detections: []
+      };
+    });
+  })();
 
   const getCurrentImage = () => {
     if (activeTab === 'original') return result.original_image;
@@ -242,682 +261,337 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
     return result.annotated_image || result.original_image;
   };
 
+  const scrollToImage = () => {
+    setActiveTab('annotated');
+    const el = document.getElementById('image-viewer-card');
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  };
+
   return (
-    <div className="max-w-7xl mx-auto py-6 px-4 space-y-6 animate-fade-up">
+    <div className="max-w-7xl mx-auto py-6 px-4 space-y-6">
 
-      {/* ── Top Header & Inspection Metadata Band ─────────────────────────── */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200 card-shadow space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-orange-50 flex items-center justify-center border border-orange-200">
-              <Zap className="w-6 h-6 text-orange-600" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-xl font-extrabold text-slate-900">Weld Inspection Report</h2>
-                <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  Complete
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 font-medium mt-0.5">
-                AI Visual Screening (AWS D1.1 Reference Criteria)  ·  {defects.length > 0 ? `${defects.length} defect indication(s) detected` : 'No Target Defect Detected'}
-              </p>
-            </div>
+      {/* ── System Header & Navigation Bar ───────────────────────────────── */}
+      <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-xl flex flex-wrap items-center justify-between gap-4 border border-slate-800">
+        <div className="flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-xl bg-orange-500/20 border border-orange-500/40 flex items-center justify-center text-orange-400">
+            <Zap className="w-6 h-6" />
           </div>
-
-          <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={onReset}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-colors cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              New Inspection
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onDownloadPdf(result)}
-              disabled={isDownloadingPdf}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs text-white transition-all cursor-pointer shadow-md disabled:opacity-50"
-              style={{ background: 'linear-gradient(135deg, #F97316, #EA580C)' }}
-            >
-              <Download className="w-3.5 h-3.5" />
-              {isDownloadingPdf ? 'Generating PDF…' : 'Download Inspection PDF'}
-            </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-black tracking-tight text-white">WELDVISION AI</h1>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-orange-500/20 text-orange-400 border border-orange-500/30 uppercase tracking-wide">
+                AI Visual Inspection
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 font-medium mt-0.5">
+              AI-Assisted Weld Quality Inspection & 12-Class Discontinuity Screening
+            </p>
           </div>
         </div>
 
-        {/* Dynamic Metadata Badges Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2.5 pt-3 border-t border-slate-100 text-xs text-slate-600">
-          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200/80">
-            <Hash className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <span className="truncate"><strong>ID:</strong> {inspectionId}</span>
-          </div>
-          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200/80">
-            <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <span className="truncate"><strong>Date:</strong> {inspectionDate}</span>
-          </div>
-          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200/80">
-            <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <span className="truncate"><strong>Time:</strong> {inspectionTime}</span>
-          </div>
-          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200/80">
-            <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <span className="truncate" title={fileName}><strong>File:</strong> {fileName}</span>
-          </div>
-          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200/80 sm:col-span-2">
-            <Cpu className="w-3.5 h-3.5 text-orange-500 shrink-0" />
-            <span className="truncate"><strong>Model:</strong> {modelName}</span>
-          </div>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onReset}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all cursor-pointer"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            New Inspection
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onDownloadPdf(result)}
+            disabled={isDownloadingPdf}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs text-white transition-all cursor-pointer shadow-lg disabled:opacity-50"
+            style={{ background: 'linear-gradient(135deg, #F97316, #EA580C)' }}
+          >
+            <Download className="w-3.5 h-3.5" />
+            {isDownloadingPdf ? 'Generating PDF…' : 'Download Inspection PDF'}
+          </button>
         </div>
       </div>
 
-      {/* ── Grid Layout: Image Viewer (Left) + Quality Scorecard (Right) ───── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-
-        {/* ── Left 7 Cols: Multi-View Image Viewer ─────────────────────────── */}
-        <div className="lg:col-span-7 space-y-4">
-          <Card className="p-4 overflow-hidden">
-            <div className="flex items-center justify-between gap-2 pb-3 mb-3 border-b border-slate-100">
-              <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('original')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    activeTab === 'original' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  Original Image
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('annotated')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    activeTab === 'annotated' ? 'bg-white text-orange-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <Crosshair className="w-3.5 h-3.5" />
-                  Annotated Inspection Image
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('overlay')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    activeTab === 'overlay' ? 'bg-white text-purple-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <Layers className="w-3.5 h-3.5" />
-                  Heatmap Overlay
-                </button>
-              </div>
-
-              <span className="text-[11px] font-semibold text-slate-400 hidden sm:inline">
-                Clean Non-Overlapping Callouts
-              </span>
-            </div>
-
-            {/* Main Image Viewport */}
-            <div className="relative rounded-xl overflow-hidden bg-slate-950 flex items-center justify-center min-h-[380px] max-h-[520px] border border-slate-900">
-              <img
-                src={getCurrentImage()}
-                alt="Weld inspection view"
-                className="max-h-[510px] w-auto object-contain"
-              />
-
-              {activeTab === 'annotated' && (
-                <div
-                  className="absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 rounded-xl text-[11px] font-bold text-white"
-                  style={{ background: 'rgba(15,23,42,0.88)', backdropFilter: 'blur(8px)' }}
-                >
-                  <span className="text-slate-300">Severity Legend:</span>
-                  <div className="flex items-center gap-3">
-                    <span className="flex items-center gap-1 text-red-400"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" /> Critical</span>
-                    <span className="flex items-center gap-1 text-orange-400"><span className="w-2 h-2 rounded-full bg-orange-500 inline-block" /> High</span>
-                    <span className="flex items-center gap-1 text-yellow-400"><span className="w-2 h-2 rounded-full bg-yellow-500 inline-block" /> Medium</span>
-                    <span className="flex items-center gap-1 text-emerald-400"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Low</span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="mt-3 text-center text-xs text-slate-500 font-medium">
-              {activeTab === 'original' && 'Original unprocessed weld capture.'}
-              {activeTab === 'annotated' && 'Complete image inspection with non-overlapping callout leader lines.'}
-              {activeTab === 'overlay' && 'Segmentation mask heatmap overlay showing exact defect regions.'}
-            </div>
-          </Card>
-        </div>
-
-        {/* ── Right 5 Cols: Quality & Acceptance Scorecard ──────────────────── */}
-        <div className="lg:col-span-5 space-y-4">
-          <Card className="p-6">
-            <div className="text-center pb-4 border-b border-slate-100">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                Weld Quality Scorecard
-              </span>
-
-              {/* Main Score Ring */}
-              <div className="my-4">
-                <ScoreRing score={score} />
-              </div>
-
-              {/* Acceptance Badge */}
-              <div
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-black border shadow-sm mb-3"
-                style={{ background: statusCfg.bg, color: statusCfg.text, borderColor: statusCfg.border }}
-              >
-                <StatusIcon className="w-4 h-4" />
-                Overall Status: {status}
-              </div>
-
-              <p className="text-xs font-medium text-slate-500">
-                Overall Severity: <strong className="text-slate-800">{overallSeverity}</strong>
-              </p>
-            </div>
-
-            {/* Dynamic Meters */}
-            <div className="pt-4 space-y-4">
-              <div>
-                <div className="flex justify-between items-center text-xs font-bold text-slate-700 mb-1.5">
-                  <span>Weld Quality Meter</span>
-                  <span className="text-orange-600 font-extrabold">{score} / 100</span>
-                </div>
-                <WeldQualityMeter score={score} />
-              </div>
-
-              <div>
-                <div className="flex justify-between items-center text-xs font-bold text-slate-700 mb-1.5">
-                  <span>Defect Severity Index</span>
-                  <span className="text-slate-900 font-extrabold">{overallSeverity}</span>
-                </div>
-                <DefectSeverityMeter riskLabel={overallSeverity} />
-              </div>
-
-              <div className="pt-2 flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200">
-                <span className="text-xs font-bold text-slate-700">Repair Priority</span>
-                <span className="text-xs font-extrabold px-2.5 py-1 rounded-lg bg-orange-100 text-orange-800 border border-orange-300">
-                  {repairPriority}
-                </span>
-              </div>
-            </div>
-          </Card>
-        </div>
-
-      </div>
-
-      {/* ── Defect Summary & Breakdown Section ─────────────────────────────── */}
+      {/* ── SECTION 1: OVERALL INSPECTION RESULT ─────────────────────────── */}
       <Card className="p-6">
-        <SectionTitle icon={BarChart3} label="Defect Summary & Class Breakdown" />
+        <SectionTitle icon={Activity} label="Overall Inspection Result" />
 
-        {/* ── CURRENT SPECIMEN INSPECTION METRICS ── */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-2.5">
-            <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider">
-              Current Specimen Inspection
-            </h4>
-            <span className="text-[10px] text-slate-400 font-medium">
-              Deterministic metrics for current uploaded weld specimen
-            </span>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {/* Quality Score */}
+          <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 text-center flex flex-col justify-center">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">Quality Score</span>
+            <ScoreRing score={score} />
+            <span className="text-xs font-semibold text-slate-500 mt-2">AI Visual Screening Metric</span>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-            <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 text-center">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Detections</p>
-              <p className="text-2xl font-black text-slate-900 mt-1">{totalModelDetections}</p>
-              <p className="text-[10px] text-slate-400 mt-0.5">Model Total</p>
+          {/* Overall Status */}
+          <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 text-center flex flex-col justify-center items-center">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">Overall Status</span>
+            <div
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-extrabold border shadow-xs"
+              style={{ background: statusCfg.bg, color: statusCfg.text, borderColor: statusCfg.border }}
+            >
+              <StatusIcon className="w-4 h-4" />
+              {status}
             </div>
-
-            <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/60 text-center">
-              <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Confirmed</p>
-              <p className="text-2xl font-black text-emerald-700 mt-1">{confirmedCount}</p>
-              <p className="text-[10px] text-emerald-500 mt-0.5">≥ 20% Conf.</p>
-            </div>
-
-            <div className="p-3.5 rounded-xl border border-blue-200 bg-blue-50/60 text-center">
-              <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Review Req.</p>
-              <p className="text-2xl font-black text-blue-700 mt-1">{reviewRequiredCount}</p>
-              <p className="text-[10px] text-blue-500 mt-0.5">10% – 19.9%</p>
-            </div>
-
-            <div className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/60 text-center">
-              <p className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Possible Ind.</p>
-              <p className="text-2xl font-black text-amber-700 mt-1">{possibleIndicationsCount}</p>
-              <p className="text-[10px] text-amber-500 mt-0.5">&lt; 10% Conf.</p>
-            </div>
-
-            <div className="p-3.5 rounded-xl border border-teal-200 bg-teal-50/60 text-center">
-              <p className="text-[10px] font-bold text-teal-700 uppercase tracking-wider">Good Welding</p>
-              <p className="text-2xl font-black text-teal-700 mt-1">{goodWeldingCount}</p>
-              <p className="text-[10px] text-teal-500 mt-0.5">Sound Bead</p>
-            </div>
-
-            <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 text-center">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Defective Area</p>
-              <p className="text-2xl font-black text-slate-900 mt-1">{defectiveAreaPct}%</p>
-              <p className="text-[10px] text-slate-400 mt-0.5">Surface</p>
-            </div>
-
-            <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/60 text-center col-span-2 sm:col-span-1">
-              <p className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider">AI Confidence</p>
-              <p className="text-2xl font-black text-indigo-700 mt-1">{overallDetectionConf}%</p>
-              <p className="text-[10px] text-indigo-500 mt-0.5">Overall Detection Confidence</p>
-            </div>
-          </div>
-        </div>
-
-        {/* ── MODEL EVALUATION METRICS (BENCHMARK TEST DATASET) ── */}
-        <div className="mb-6 pt-4 border-t border-slate-200">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-2.5 gap-1">
-            <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
-              <Shield className="w-3.5 h-3.5 text-slate-400" />
-              Model Evaluation Metrics (YOLO11n-seg · 40 Epochs)
-            </h4>
-            <span className="text-[10px] text-slate-400 font-medium">
-              Tesla T4 Validation · Strictly separate from current specimen inspection
-            </span>
+            <p className="text-xs text-slate-500 font-medium mt-3">
+              Screening Classification per AWS D1.1 Reference Criteria
+            </p>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="p-3 rounded-xl border border-slate-200 bg-slate-50/80 text-center">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Precision (Box / Mask)</p>
-              <p className="text-xl font-black text-slate-800 mt-0.5">24.8% / 23.7%</p>
-              <p className="text-[9px] text-slate-400 mt-0.5">Test Dataset Validation</p>
+          {/* Overall Severity */}
+          <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 text-center flex flex-col justify-center items-center">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">Overall Severity</span>
+            <div className={`px-4 py-2 rounded-2xl text-sm font-extrabold border ${
+              overallSeverity === 'Critical' ? 'bg-red-50 text-red-700 border-red-200' :
+              overallSeverity === 'High' ? 'bg-orange-50 text-orange-700 border-orange-200' :
+              overallSeverity === 'Medium' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+              'bg-emerald-50 text-emerald-700 border-emerald-200'
+            }`}>
+              {overallSeverity}
             </div>
-
-            <div className="p-3 rounded-xl border border-slate-200 bg-slate-50/80 text-center">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Recall (Box / Mask)</p>
-              <p className="text-xl font-black text-slate-800 mt-0.5">27.9% / 25.3%</p>
-              <p className="text-[9px] text-slate-400 mt-0.5">Test Dataset Validation</p>
-            </div>
-
-            <div className="p-3 rounded-xl border border-slate-200 bg-slate-50/80 text-center">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">mAP50 (Box / Mask)</p>
-              <p className="text-xl font-black text-slate-800 mt-0.5">20.8% / 18.4%</p>
-              <p className="text-[9px] text-slate-400 mt-0.5">IoU @ 0.50</p>
-            </div>
-
-            <div className="p-3 rounded-xl border border-slate-200 bg-slate-50/80 text-center">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">mAP50-95</p>
-              <p className="text-xl font-black text-slate-800 mt-0.5">13.0% / 9.7%</p>
-              <p className="text-[9px] text-slate-400 mt-0.5">Box / Mask (0.50:0.95)</p>
-            </div>
+            <p className="text-xs text-slate-500 font-medium mt-3">
+              Discontinuity Impact Assessment
+            </p>
           </div>
 
-          <div className="mt-2.5 p-2 rounded-lg bg-orange-50/50 border border-orange-100 text-[10px] text-orange-800 flex flex-wrap items-center justify-between gap-1">
-            <span className="font-bold text-orange-900">Strongest Learned Classes:</span>
-            <span>Porosity mAP50: <strong className="font-semibold text-orange-950">64.8%</strong></span>
-            <span>·</span>
-            <span>Spatter mAP50: <strong className="font-semibold text-orange-950">34.9%</strong></span>
-            <span>·</span>
-            <span>Excessive Weld Reinforcement mAP50: <strong className="font-semibold text-orange-950">4.3%</strong></span>
-          </div>
-        </div>
-
-        {/* Breakdown Chips: Detected Classes vs Active Defects */}
-        <div className="space-y-4">
-          <div>
-            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-              Detected Classes:
-            </h4>
-            <div className="flex flex-wrap gap-2">
-              {Object.keys(detectedClasses).length === 0 ? (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
-                  <Check className="w-3.5 h-3.5" /> No detections found
-                </span>
-              ) : (
-                Object.entries(detectedClasses).map(([defType, count]) => {
-                  const isGood = defType === "Good Welding";
-                  const bgClass = isGood
-                    ? 'bg-teal-50 text-teal-800 border-teal-200'
-                    : 'bg-slate-100 text-slate-800 border-slate-200';
-                  return (
-                    <div
-                      key={defType}
-                      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold border ${bgClass}`}
-                    >
-                      <span>{defType}:</span>
-                      <span className="px-2 py-0.5 rounded-md bg-white font-black shadow-xs">
-                        {count}
-                      </span>
-                    </div>
-                  );
-                })
-              )}
+          {/* Total Detected Indications */}
+          <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 text-center flex flex-col justify-center items-center">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">Total Detected Indications</span>
+            <div className={`text-4xl font-black ${totalDetectedIndications > 0 ? 'text-orange-600' : 'text-emerald-600'}`}>
+              {totalDetectedIndications}
             </div>
-          </div>
-
-          <div>
-            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-              Active Defects:
-            </h4>
-            <div className="flex flex-wrap gap-2">
-              {Object.keys(activeDefectsBreakdown).length === 0 ? (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
-                  <Check className="w-3.5 h-3.5" /> Zero active defects detected (Sound Weld)
-                </span>
-              ) : (
-                Object.entries(activeDefectsBreakdown).map(([defType, count]) => {
-                  const isCrit = ["Incomplete Fusion", "Incomplete Penetration"].includes(defType);
-                  const isHigh = ["Slag Inclusion", "Undercut", "Porosity", "Underfill", "Excessive Concavity", "Excessive Penetration"].includes(defType);
-                  const bgClass = isCrit
-                    ? 'bg-red-50 text-red-700 border-red-200'
-                    : isHigh
-                    ? 'bg-orange-50 text-orange-700 border-orange-200'
-                    : 'bg-amber-50 text-amber-700 border-amber-200';
-                  return (
-                    <div
-                      key={defType}
-                      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-extrabold border ${bgClass}`}
-                    >
-                      <span>{defType}:</span>
-                      <span className="px-2 py-0.5 rounded-md bg-white font-black shadow-xs">
-                        {count}
-                      </span>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+            <p className="text-xs text-slate-500 font-medium mt-2">
+              {totalDetectedIndications > 0 ? 'Actual YOLO Discontinuity Predictions' : 'Zero Defect Indications Detected'}
+            </p>
           </div>
         </div>
       </Card>
 
-      {/* ── Problem & Failure Explanation (For Every Detected Defect) ─────── */}
+      {/* ── Visual Inspection Viewer ──────────────────────────────────────── */}
+      <Card id="image-viewer-card" className="p-5">
+        <div className="flex items-center justify-between gap-2 pb-3 mb-3 border-b border-slate-100">
+          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setActiveTab('original')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'original' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Eye className="w-3.5 h-3.5" />
+              Original Image
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('annotated')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'annotated' ? 'bg-white text-orange-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Crosshair className="w-3.5 h-3.5" />
+              Annotated Inspection Image
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('overlay')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'overlay' ? 'bg-white text-purple-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              Heatmap Overlay
+            </button>
+          </div>
+
+          <span className="text-xs font-medium text-slate-400 hidden sm:inline">
+            YOLO11 Segmentation Leader-Line View
+          </span>
+        </div>
+
+        <div className="relative rounded-xl overflow-hidden bg-slate-950 flex items-center justify-center min-h-[380px] max-h-[520px] border border-slate-900">
+          <img
+            src={getCurrentImage()}
+            alt="Weld inspection view"
+            className="max-h-[510px] w-auto object-contain"
+          />
+        </div>
+      </Card>
+
+      {/* ── SECTION 3: 12-CLASS WELD DEFECT INSPECTION ───────────────────── */}
       <Card className="p-6">
         <SectionTitle
-          icon={Wrench}
-          label={`Problem & Failure Analysis (Every Detected Defect)`}
+          icon={ShieldAlert}
+          label="12-Class Weld Defect Inspection Summary"
           right={
             <span className="text-xs text-slate-400 font-semibold">
-              Detailed root causes and corrective actions
+              Comprehensive 12-Class Visual Screening Catalogue
             </span>
           }
         />
 
-        {defects.length === 0 ? (
-          <div className="p-5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-medium flex items-center gap-3">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-            <span>No target welding defect indications were detected by AI visual screening. Manual CWI verification recommended for final acceptance.</span>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {defects.map((d, i) => {
-              const defNum = d.id_num || i + 1;
-              const sc = SEV[d.severity] || SEV.Medium;
-              const isPossible = (d.confidence || 0) < 0.30;
-              const isReview = (d.confidence || 0) >= 0.30 && (d.confidence || 0) < 0.50;
-              return (
-                <div
-                  key={d.id || defNum}
-                  className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-slate-50 transition-colors space-y-3"
-                  style={{ borderLeftWidth: 4, borderLeftColor: sc.dot }}
-                >
-                  <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-200">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-black text-xs text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
-                        DEFECT #{defNum}
-                      </span>
-                      <strong className="text-slate-900 text-sm">{d.class_name || d.type}</strong>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${
-                        (d.confidence_tier === 'Confirmed Defect' || d.confidence >= 0.50)
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : (d.confidence_tier === 'Review Required' || d.confidence >= 0.30)
-                          ? 'bg-blue-50 text-blue-700 border-blue-200'
-                          : 'bg-amber-50 text-amber-700 border-amber-200'
-                      }`}>
-                        {d.confidence_tier || (d.confidence >= 0.50 ? 'Confirmed Defect' : d.confidence >= 0.30 ? 'Review Required' : 'Possible Indication')}
-                      </span>
-                      <SeverityBadge value={d.severity} size="xs" />
-                    </div>
+        <p className="text-xs text-slate-500 mb-6 font-medium">
+          Every uploaded weld joint is screened against all 12 target defect classes. Real model indications display actual YOLO evidence; non-detected classes provide technical screening rationale and verification criteria.
+        </p>
+
+        {/* 12 Cards Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {twelveCards.map((card, idx) => {
+            const isDetected = card.category === 'detected' || card.status_type === 'detected' || (card.status && card.status.includes('DETECTED'));
+            const isVerification = card.category === 'verification' || card.status_type === 'verification' || (card.status && (card.status.includes('Required') || card.status.includes('Recommended')));
+
+            return (
+              <div
+                key={card.class_name || idx}
+                className={`p-4 rounded-xl border transition-all space-y-3 ${
+                  isDetected
+                    ? 'bg-red-50/40 border-red-200 hover:border-red-300'
+                    : isVerification
+                    ? 'bg-amber-50/40 border-amber-200 hover:border-amber-300'
+                    : 'bg-slate-50/70 border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                {/* Card Top Row */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-lg bg-slate-200/70 text-slate-700 text-[11px] font-black flex items-center justify-center shrink-0">
+                      {idx + 1}
+                    </span>
+                    <h4 className="text-sm font-extrabold text-slate-900">{card.class_name}</h4>
                   </div>
 
-                  <div className="space-y-2 text-xs">
-                    {/* Dynamic detection metadata pills (clean plain text without svg prefix) */}
-                    <div className="flex flex-wrap gap-2 mb-1">
-                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-[10px] font-bold border border-blue-200">
-                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0 inline-block" />
-                        {cleanText(d.location || d.region || 'Center weld region')}
-                      </span>
-                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold border border-slate-200">
-                        <span className="w-1.5 h-1.5 rounded-full bg-slate-500 shrink-0 inline-block" />
-                        {Math.round((d.confidence || 0) * 100)}% Confidence
-                      </span>
-                      {d.detected_size && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 text-[10px] font-bold border border-purple-200">
-                          {d.detected_size}
-                        </span>
-                      )}
-                    </div>
+                  {/* Status Badge */}
+                  {isDetected ? (
+                    <span className="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-red-100 text-red-800 border border-red-300 inline-flex items-center gap-1.5 shrink-0">
+                      <AlertOctagon className="w-3.5 h-3.5 text-red-600" />
+                      {card.status}
+                    </span>
+                  ) : isVerification ? (
+                    <span className="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-amber-100 text-amber-800 border border-amber-300 inline-flex items-center gap-1.5 shrink-0">
+                      <Search className="w-3.5 h-3.5 text-amber-600" />
+                      {card.status}
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 inline-flex items-center gap-1.5 shrink-0">
+                      <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                      {card.status}
+                    </span>
+                  )}
+                </div>
 
-                    {d.observation && (
-                      <div>
-                        <span className="font-bold text-slate-700 block text-[11px] uppercase tracking-wider text-blue-600">
-                          • Observation:
-                        </span>
-                        <p className="text-slate-700 mt-0.5 leading-relaxed font-medium italic">
-                          {cleanText(d.observation)}
-                        </p>
-                      </div>
+                {/* Detected Details Pills */}
+                {isDetected && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <span className="px-2 py-0.5 rounded-md bg-white border border-red-200 text-red-700 text-[10px] font-bold">
+                      Confidence: {card.confidence}%
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-white border border-red-200 text-red-700 text-[10px] font-bold">
+                      Count: {card.count} indication(s)
+                    </span>
+                    {card.location && (
+                      <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 text-[10px] font-bold">
+                        {card.location}
+                      </span>
                     )}
-
-                    <div>
-                      <span className="font-bold text-slate-700 block text-[11px] uppercase tracking-wider text-red-600">
-                        • Problem:
+                    {card.severity && (
+                      <span className="px-2 py-0.5 rounded-md bg-orange-100 border border-orange-300 text-orange-800 text-[10px] font-extrabold">
+                        Severity: {card.severity}
                       </span>
-                      <p className="text-slate-700 mt-0.5 leading-relaxed font-medium">
-                        {cleanText(d.problem || `${d.type} detected in ${d.location}.`)}
-                      </p>
-                    </div>
-
-                    <div>
-                      <span className="font-bold text-slate-700 block text-[11px] uppercase tracking-wider text-orange-600">
-                        • Possible Cause:
-                      </span>
-                      <p className="text-slate-600 mt-0.5 leading-relaxed">
-                        {cleanText(d.possible_cause || d.root_cause || 'Possible contributing factors under review.')}
-                      </p>
-                    </div>
-
-                    <div>
-                      <span className="font-bold text-slate-700 block text-[11px] uppercase tracking-wider text-emerald-600">
-                        • Recommended Action:
-                      </span>
-                      <p className="text-slate-600 mt-0.5 leading-relaxed font-medium">
-                        {cleanText(d.recommended_action || d.repair_method || 'Inspect area and apply corrective measures per WPS.')}
-                      </p>
-                    </div>
+                    )}
                   </div>
+                )}
+
+                {/* Observation / Details Text */}
+                <div className="text-xs space-y-1.5 pt-1">
+                  {card.observation && (
+                    <p className="text-red-950 font-semibold bg-white/80 p-2 rounded-lg border border-red-100">
+                      <strong className="text-red-700 uppercase tracking-wider text-[10px] block">Observation:</strong>
+                      {card.observation}
+                    </p>
+                  )}
+
+                  <p className="text-slate-600 leading-relaxed font-medium">
+                    <strong className="text-slate-700 font-bold block text-[10px] uppercase tracking-wider">Explanation:</strong>
+                    {card.explanation}
+                  </p>
+
+                  {card.possible_causes && (
+                    <p className="text-slate-600 leading-relaxed">
+                      <strong className="text-orange-700 font-bold block text-[10px] uppercase tracking-wider">Possible Causes:</strong>
+                      {card.possible_causes}
+                    </p>
+                  )}
+
+                  <p className="text-slate-600 leading-relaxed font-medium">
+                    <strong className="text-emerald-700 font-bold block text-[10px] uppercase tracking-wider">Recommendation:</strong>
+                    {card.recommendation}
+                  </p>
                 </div>
-              );
-            })}
+
+                {/* Action button for detected class */}
+                {isDetected && (
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={scrollToImage}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-orange-700 bg-orange-100 hover:bg-orange-200 border border-orange-300 transition-colors cursor-pointer"
+                    >
+                      <Crosshair className="w-3.5 h-3.5" />
+                      View Detection on Image
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* ── Quality Assessment Rationale ──────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="p-6">
+          <SectionTitle icon={HelpCircle} label="Quality Assessment Rationale" />
+          <div className="p-4 rounded-xl bg-blue-50/70 border border-blue-200 text-slate-800 text-xs leading-relaxed space-y-2">
+            <p className="font-bold text-slate-900">
+              Assigned Score: <strong className="text-blue-700">{score}/100</strong>  ·  Overall Severity: <strong className="text-slate-900">{overallSeverity}</strong>
+            </p>
+            <p className="text-slate-700">
+              {qa.explanation || result.quality_assessment?.explanation || 'Quality score dynamically computed from YOLO segmentation outputs and visual inspection rules.'}
+            </p>
           </div>
-        )}
-      </Card>
+          <div className="mt-3 text-[11px] text-slate-400 font-medium">
+            Standard: AWS D1.1 Table 6.1 (Visual Inspection Acceptance Criteria)
+          </div>
+        </Card>
 
-      {/* ── Complete Detected Defects Table ────────────────────────────────── */}
-      <Card className="p-6">
-        <SectionTitle
-          icon={FileCheck}
-          label={`Complete Detected Defects Catalogue (${defects.length})`}
-          right={
-            <span className="text-xs text-slate-400 font-semibold">
-              Click row to toggle quick details
-            </span>
-          }
-        />
-
-        <div className="overflow-x-auto border border-slate-200 rounded-xl">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-900 text-white font-bold uppercase tracking-wider text-[10px]">
-              <tr>
-                <th className="py-3 px-4">Defect #</th>
-                <th className="py-3 px-4">Defect Name</th>
-                <th className="py-3 px-4">Severity</th>
-                <th className="py-3 px-4">AI Confidence</th>
-                <th className="py-3 px-4">Exact Region</th>
-                <th className="py-3 px-4">Detected Size</th>
-                <th className="py-3 px-4">Area (%)</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4 text-center">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 font-medium text-slate-700">
-              {defects.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="py-8 text-center text-slate-400 italic">
-                    Zero visual weld defects detected. Weld seam is in excellent sound condition.
-                  </td>
-                </tr>
-              ) : (
-                defects.map((d, i) => {
-                  const defId = d.id || `WLD-${i + 1}`;
-                  const isExpanded = expandedId === defId;
-                  return (
-                    <React.Fragment key={defId}>
-                      <tr
-                        onClick={() => setExpandedId(isExpanded ? null : defId)}
-                        className={`hover:bg-slate-50 cursor-pointer transition-colors ${
-                          isExpanded ? 'bg-orange-50/40' : ''
-                        }`}
-                      >
-                        <td className="py-3.5 px-4 font-black text-slate-900 font-mono">
-                          DEFECT #{d.id_num || i + 1}
-                        </td>
-                        <td className="py-3.5 px-4 font-bold text-slate-900">{d.class_name || d.type || d.defect_name}</td>
-                        <td className="py-3.5 px-4">
-                          <SeverityBadge value={d.severity} />
-                        </td>
-                        <td className="py-3.5 px-4 font-mono">
-                          <span className="font-bold text-slate-800">{Math.round((d.confidence || 0) * 100)}%</span>
-                          {d.confidence_tier && (
-                            <span className={`ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-semibold ${
-                              (d.confidence_tier === 'Confirmed Defect' || d.confidence >= 0.50) ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
-                              (d.confidence_tier === 'Review Required' || d.confidence >= 0.30) ? 'bg-blue-50 text-blue-700 border border-blue-200' :
-                              'bg-amber-50 text-amber-700 border border-amber-200'
-                            }`}>
-                              {d.confidence_tier}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-4 text-slate-600">{cleanText(d.location || d.region || 'Center weld region')}</td>
-                        <td className="py-3.5 px-4 font-mono">{d.detected_size || d.region_size || d.size_mm || 'N/A'}</td>
-                        <td className="py-3.5 px-4 font-bold">{d.area_pct}%</td>
-                        <td className="py-3.5 px-4">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
-                            {d.status || d.confidence_tier || 'Possible Indication'}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4 text-center">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setExpandedId(isExpanded ? null : defId);
-                            }}
-                            className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer"
-                            aria-label={isExpanded ? 'Collapse repair details' : 'View repair details'}
-                          >
-                            <span>{isExpanded ? 'Hide' : 'Details'}</span>
-                            {isExpanded ? (
-                              <ChevronUp className="w-3.5 h-3.5 text-slate-500" aria-hidden="true" />
-                            ) : (
-                              <ChevronDown className="w-3.5 h-3.5 text-slate-500" aria-hidden="true" />
-                            )}
-                          </button>
-                        </td>
-                      </tr>
-
-                      {isExpanded && (
-                        <tr className="bg-slate-50/80">
-                          <td colSpan={9} className="p-4 border-t border-slate-200">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                              <div className="bg-white p-3.5 rounded-xl border border-slate-200">
-                                <h5 className="font-bold text-slate-800 mb-1 text-[11px] uppercase tracking-wider text-orange-600">
-                                  Root Cause Analysis:
-                                </h5>
-                                <p className="text-slate-600 leading-relaxed">
-                                  {d.possible_cause || d.root_cause || d.explain || 'Thermal stress or gas entrapped during weld solidifying pass.'}
-                                </p>
-                              </div>
-
-                              <div className="bg-white p-3.5 rounded-xl border border-slate-200">
-                                <h5 className="font-bold text-slate-800 mb-1 text-[11px] uppercase tracking-wider text-emerald-600">
-                                  Recommended Repair Procedure:
-                                </h5>
-                                <p className="text-slate-600 leading-relaxed">
-                                  {d.recommended_action || d.repair_method || 'Grind out defect region and re-weld.'}
-                                </p>
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      {/* ── Quality Assessment & Final Inspection Conclusion ──────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-6">
-          <Card className="p-6 h-full flex flex-col justify-between">
-            <div>
-              <SectionTitle icon={HelpCircle} label="Quality Assessment Rationale" />
-              <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200 text-slate-800 text-xs leading-relaxed mb-3">
-                <p className="font-semibold text-slate-900 mb-1">
-                  Assigned Score: <strong>{score}/100</strong>  ·  Overall Severity: <strong>{overallSeverity}</strong>
-                </p>
-                <p className="text-slate-700">{qaExplanation}</p>
-              </div>
-            </div>
-
-            <div className="pt-3 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
-              Standards: AWS D1.1 Table 6.1 (Visual Inspection Acceptance Criteria)
-            </div>
-          </Card>
-        </div>
-
-        <div className="lg:col-span-6">
-          <Card className="p-6 h-full flex flex-col justify-between">
-            <div>
-              <SectionTitle icon={Shield} label="Final Inspection Conclusion" />
-              <div
-                className="p-4 rounded-xl text-xs leading-relaxed mb-3 border"
-                style={{ background: statusCfg.bg, borderColor: statusCfg.border, color: statusCfg.text }}
-              >
-                <p className="font-black text-sm uppercase mb-1">
-                  Verdict: {status}
-                </p>
-                <p className="font-medium text-slate-800 leading-relaxed">
-                  {conclusion}
-                </p>
-              </div>
-            </div>
-
-            <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500 font-medium">
-              <span>Status: <strong className="text-slate-800">{status}</strong></span>
-              <span>Repair Priority: <strong className="text-slate-800">{repairPriority}</strong></span>
-            </div>
-          </Card>
-        </div>
+        <Card className="p-6">
+          <SectionTitle icon={Shield} label="Final Inspection Conclusion" />
+          <div
+            className="p-4 rounded-xl text-xs leading-relaxed border space-y-2"
+            style={{ background: statusCfg.bg, borderColor: statusCfg.border, color: statusCfg.text }}
+          >
+            <p className="font-black text-sm uppercase">
+              Verdict: {status}
+            </p>
+            <p className="font-medium text-slate-800">
+              {result.conclusion || weldQuality.conclusion || 'AI Inspection completed. Perform qualified inspector review as required.'}
+            </p>
+          </div>
+          <div className="mt-3 flex justify-between text-[11px] text-slate-500 font-medium">
+            <span>Status: <strong className="text-slate-800">{status}</strong></span>
+            <span>Repair Priority: <strong className="text-slate-800">{weldQuality.repair_priority || 'No Action Required'}</strong></span>
+          </div>
+        </Card>
       </div>
 
-      {/* ── Bottom Download CTA Banner ────────────────────────────────────── */}
-      <div className="bg-slate-900 text-white rounded-2xl p-6 flex flex-wrap items-center justify-between gap-4 card-shadow">
+      {/* ── PDF Export Banner ─────────────────────────────────────────────── */}
+      <div className="bg-slate-900 text-white rounded-2xl p-6 flex flex-wrap items-center justify-between gap-4 shadow-xl border border-slate-800">
         <div>
           <h3 className="text-base font-bold">Official Industrial Inspection Documentation</h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Download full multi-page PDF report containing all {totalDefects} detected defect breakdown, problem analysis, visual evidence, and inspector sign-off block.
+            Download full PDF report with complete 12-class inspection summary, genuine YOLO visual callouts, and inspector sign-off block.
           </p>
         </div>
 

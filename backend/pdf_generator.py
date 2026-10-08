@@ -288,6 +288,50 @@ def generate_pdf_report(data: dict) -> bytes:
 
     story.append(PageBreak())
 
+    _section_header(story, "12-CLASS WELD DEFECT INSPECTION SUMMARY", T_h2, 0)
+
+    # 12-Class Complete Inspection Table
+    t12_heads = ["Target Defect Class", "Inspection Status", "Evidence / Confidence", "Recommendation & Action"]
+    t12_widths = [42 * mm, 45 * mm, 33 * mm, 55 * mm]
+    t12_rows = [[Paragraph(h, T_tbl_h) for h in t12_heads]]
+
+    twelve_cards = data.get("twelve_class_inspection", [])
+    for card in twelve_cards:
+        cname = card.get("class_name", "Defect Class")
+        status_str = card.get("status", "No visible indication detected")
+        cat = card.get("category", "not_detected")
+        conf_val = card.get("confidence")
+        count_val = card.get("count", 0)
+        rec_str = _clean_svg_text(card.get("recommendation", "N/A"))
+
+        if cat == "detected" or "DETECTED" in status_str.upper():
+            stat_cell = Paragraph(f"<font color='{RED.hexval()}'><b>{status_str}</b></font>", T_tbl_b)
+            ev_cell = Paragraph(f"<b>{conf_val}% Conf.</b> ({count_val} count)", T_tbl_bc)
+        elif cat == "verification" or "REQUIRED" in status_str.upper() or "RECOMMENDED" in status_str.upper():
+            stat_cell = Paragraph(f"<font color='{ORANGE.hexval()}'><b>{status_str}</b></font>", T_tbl_b)
+            ev_cell = Paragraph("Profile / NDT Required", T_tbl_bc)
+        else:
+            stat_cell = Paragraph(f"<font color='{GREEN.hexval()}'><b>{status_str}</b></font>", T_tbl_b)
+            ev_cell = Paragraph("No visual indication", T_tbl_bc)
+
+        t12_rows.append([
+            Paragraph(f"<b>{cname}</b>", T_tbl_b),
+            stat_cell,
+            ev_cell,
+            Paragraph(rec_str, T_tbl_b),
+        ])
+
+    t12_tbl = Table(t12_rows, colWidths=t12_widths, repeatRows=1)
+    t12_tbl.setStyle(TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0), DARK_HEADER),
+        ("GRID",           (0, 0), (-1, -1), 0.4, BORDER),
+        ("PADDING",        (0, 0), (-1, -1), 4),
+        ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, SLATE_LIGHT]),
+    ]))
+    story.append(t12_tbl)
+    story.append(Spacer(1, 8))
+
     _section_header(story, "DETECTION SUMMARY", T_h2, 0)
 
     # Defect Type Breakdown Table
