@@ -156,8 +156,8 @@ def generate_pdf_report(data: dict) -> bytes:
     overall_sev     = qa.get("severity", weld_quality.get("overall_severity", weld_quality.get("overall_risk", data.get("overall_risk", "Low"))))
     repair_priority = weld_quality.get("repair_priority", "No Action Required")
     
-    total_defects   = summary.get("total_defects", data.get("total_defects", 0))
     defects         = data.get("defects", [])
+    total_defects   = len(defects)
     breakdown       = summary.get("breakdown", data.get("breakdown", {}))
     defective_area  = summary.get("defective_area_percent", data.get("damaged_pct", 0.0))
     conf_pct        = summary.get("inspection_confidence", data.get("inspection_confidence", 95.0))
@@ -288,90 +288,49 @@ def generate_pdf_report(data: dict) -> bytes:
 
     story.append(PageBreak())
 
-    _section_header(story, "12-CLASS WELD DEFECT INSPECTION SUMMARY", T_h2, 0)
-
-    # 12-Class Complete Inspection Table
-    t12_heads = ["Target Defect Class", "Inspection Status", "Evidence / Confidence", "Recommendation & Action"]
-    t12_widths = [42 * mm, 45 * mm, 33 * mm, 55 * mm]
-    t12_rows = [[Paragraph(h, T_tbl_h) for h in t12_heads]]
-
-    twelve_cards = data.get("twelve_class_inspection", [])
-    for card in twelve_cards:
-        cname = card.get("class_name", "Defect Class")
-        status_str = card.get("status", "No visible indication detected")
-        cat = card.get("category", "not_detected")
-        conf_val = card.get("confidence")
-        count_val = card.get("count", 0)
-        rec_str = _clean_svg_text(card.get("recommendation", "N/A"))
-
-        if cat == "detected" or "DETECTED" in status_str.upper():
-            stat_cell = Paragraph(f"<font color='{RED.hexval()}'><b>{status_str}</b></font>", T_tbl_b)
-            ev_cell = Paragraph(f"<b>{conf_val}% Conf.</b> ({count_val} count)", T_tbl_bc)
-        elif cat == "verification" or "REQUIRED" in status_str.upper() or "RECOMMENDED" in status_str.upper():
-            stat_cell = Paragraph(f"<font color='{ORANGE.hexval()}'><b>{status_str}</b></font>", T_tbl_b)
-            ev_cell = Paragraph("Profile / NDT Required", T_tbl_bc)
-        else:
-            stat_cell = Paragraph(f"<font color='{GREEN.hexval()}'><b>{status_str}</b></font>", T_tbl_b)
-            ev_cell = Paragraph("No visual indication", T_tbl_bc)
-
-        t12_rows.append([
-            Paragraph(f"<b>{cname}</b>", T_tbl_b),
-            stat_cell,
-            ev_cell,
-            Paragraph(rec_str, T_tbl_b),
-        ])
-
-    t12_tbl = Table(t12_rows, colWidths=t12_widths, repeatRows=1)
-    t12_tbl.setStyle(TableStyle([
-        ("BACKGROUND",     (0, 0), (-1, 0), DARK_HEADER),
-        ("GRID",           (0, 0), (-1, -1), 0.4, BORDER),
-        ("PADDING",        (0, 0), (-1, -1), 4),
-        ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, SLATE_LIGHT]),
-    ]))
-    story.append(t12_tbl)
-    story.append(Spacer(1, 8))
-
     _section_header(story, "DETECTION SUMMARY", T_h2, 0)
 
-    # Defect Type Breakdown Table
-    b_rows = [[
-        Paragraph("<b>Class Name</b>", T_tbl_h),
-        Paragraph("<b>Detections</b>", T_tbl_h),
-        Paragraph("<b>Class Severity</b>", T_tbl_h),
-        Paragraph("<b>Status Classification</b>", T_tbl_h),
-    ]]
-
-    if not breakdown:
-        b_rows.append([
-            Paragraph("No active defects detected", T_tbl_b),
-            Paragraph("0", T_tbl_bc),
-            Paragraph("Low", T_tbl_bc),
-            Paragraph("Accepted", T_tbl_bc),
-        ])
+    # Defect Type Breakdown Table - Displays ONLY actual detected classes
+    if not defects or total_defects == 0:
+        clean_summary = Table([[
+            Paragraph(
+                "<b>No target defects detected.</b><br/>"
+                f"<font color='{SLATE_MID.hexval()}'>YOLO11 visual screening evaluated the specimen across all 12 supported defect categories with 0 positive indications. "
+                "The inspected weld satisfies visual screening criteria.</font>",
+                T_body
+            ),
+            Paragraph("<b>Total Defect Count: 0</b>", T_tbl_bc)
+        ]], colWidths=[130 * mm, 45 * mm])
+        clean_summary.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), GREEN_LIGHT),
+            ("BOX",        (0, 0), (-1, -1), 0.8, GREEN),
+            ("PADDING",    (0, 0), (-1, -1), 8),
+            ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        story.append(clean_summary)
+        story.append(Spacer(1, 8))
     else:
+        b_rows = [[
+            Paragraph("<b>Class Name</b>", T_tbl_h),
+            Paragraph("<b>Detections</b>", T_tbl_h),
+            Paragraph("<b>Class Severity</b>", T_tbl_h),
+            Paragraph("<b>Status Classification</b>", T_tbl_h),
+        ]]
+
         for def_name, count in breakdown.items():
             if def_name == "Good Welding":
-                sev = "Low"
-                stat_lbl = "Conforming / Accepted"
+                continue
+            class_defs = [d for d in defects if d.get("type") == def_name]
+            if not class_defs and count == 0:
+                continue
+            max_conf = max((d.get("confidence", 0.0) for d in class_defs), default=0.0)
+            if max_conf >= 0.50:
+                stat_lbl = "Confirmed Defect"
             else:
-                class_defs = [d for d in defects if d.get("type") == def_name]
-                max_conf = max((d.get("confidence", 0.0) for d in class_defs), default=0.0)
-                if max_conf >= 0.20:
-                    stat_lbl = "Confirmed Defect"
-                    if def_name in ("Incomplete Fusion", "Incomplete Penetration"):
-                        sev = "Critical"
-                    elif def_name in ("Slag Inclusion", "Undercut", "Porosity", "Underfill", "Excessive Concavity", "Excessive Penetration"):
-                        sev = "High"
-                    else:
-                        sev = "Medium"
-                elif max_conf >= 0.10:
-                    stat_lbl = "Review Required"
-                    sev = "Medium"
-                else:
-                    stat_lbl = "Possible Indication"
-                    sev = "Low"
-            sc = SEVERITY_COLOR_MAP.get(sev, GREEN)
+                stat_lbl = "Review Required"
+
+            sev = class_defs[0].get("severity", "Medium") if class_defs else "Medium"
+            sc = SEVERITY_COLOR_MAP.get(sev, YELLOW)
             b_rows.append([
                 Paragraph(f"<b>{def_name}</b>", T_tbl_b),
                 Paragraph(f"<b>{count}</b>", T_tbl_bc),
@@ -379,40 +338,42 @@ def generate_pdf_report(data: dict) -> bytes:
                 Paragraph(f"<b>{stat_lbl}</b>", T_tbl_bc),
             ])
 
-    b_tbl = Table(b_rows, colWidths=[55 * mm, 30 * mm, 45 * mm, 45 * mm])
-    b_tbl.setStyle(TableStyle([
-        ("BACKGROUND",     (0, 0), (-1, 0), DARK_HEADER),
-        ("GRID",           (0, 0), (-1, -1), 0.4, BORDER),
-        ("PADDING",        (0, 0), (-1, -1), 4),
-        ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, SLATE_LIGHT]),
-    ]))
-    story.append(b_tbl)
-    story.append(Spacer(1, 8))
+        b_tbl = Table(b_rows, colWidths=[55 * mm, 30 * mm, 45 * mm, 45 * mm])
+        b_tbl.setStyle(TableStyle([
+            ("BACKGROUND",     (0, 0), (-1, 0), DARK_HEADER),
+            ("GRID",           (0, 0), (-1, -1), 0.4, BORDER),
+            ("PADDING",        (0, 0), (-1, -1), 4),
+            ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, SLATE_LIGHT]),
+        ]))
+        story.append(b_tbl)
+        story.append(Spacer(1, 8))
 
     # Complete Individual Detections Table
     _section_header(story, f"COMPLETE DETECTED DEFECTS CATALOGUE ({total_defects} Total)", T_h2, 0)
 
-    d_heads = ["Defect #", "Defect Type", "Confidence", "Exact Detected Location", "Detected Size", "Status"]
-    d_widths = [20 * mm, 34 * mm, 22 * mm, 47 * mm, 28 * mm, 24 * mm]
-    d_rows = [[Paragraph(h, T_tbl_h) for h in d_heads]]
-
-    if not defects:
-        d_rows.append([
-            Paragraph("—", T_tbl_bc),
-            Paragraph("Good Welding (No Defect)", T_tbl_b),
-            Paragraph(f"{conf_pct}%", T_tbl_bc),
-            Paragraph("Full Weld Seam", T_tbl_b),
-            Paragraph("—", T_tbl_bc),
-            Paragraph("<font color='#10B981'><b>Accepted</b></font>", T_tbl_bc),
-        ])
+    if not defects or total_defects == 0:
+        clean_cat = Table([[
+            Paragraph("<b>No target defects detected.</b> Total filtered defect detections: 0.", T_body)
+        ]], colWidths=[175 * mm])
+        clean_cat.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), SLATE_LIGHT),
+            ("BOX",        (0, 0), (-1, -1), 0.5, BORDER),
+            ("PADDING",    (0, 0), (-1, -1), 7),
+        ]))
+        story.append(clean_cat)
+        story.append(Spacer(1, 8))
     else:
+        d_heads = ["Defect #", "Defect Class", "Confidence", "Exact Detected Location", "Detected Size", "Status"]
+        d_widths = [20 * mm, 34 * mm, 22 * mm, 47 * mm, 28 * mm, 24 * mm]
+        d_rows = [[Paragraph(h, T_tbl_h) for h in d_heads]]
+
         for idx, d in enumerate(defects, 1):
             sc = SEVERITY_COLOR_MAP.get(d.get("severity", "Low"), YELLOW)
             conf_val = int(round(d.get("confidence", 0.0) * 100))
             loc_clean = _clean_svg_text(d.get("location", d.get("region", "Center weld region")))
             size_str = str(d.get("detected_size", d.get("region_size", d.get("size_mm", "N/A"))))
-            status_clean = str(d.get("status", d.get("confidence_tier", "Possible Indication")))
+            status_clean = str(d.get("status", d.get("confidence_tier", "Review Required")))
             d_rows.append([
                 Paragraph(f"<b>DEFECT #{idx}</b>", T_tbl_bc),
                 Paragraph(f"<b>{d.get('type', '—')}</b>", T_tbl_b),
@@ -422,16 +383,16 @@ def generate_pdf_report(data: dict) -> bytes:
                 Paragraph(f"<b>{status_clean}</b>", T_tbl_bc),
             ])
 
-    dtbl = Table(d_rows, colWidths=d_widths, repeatRows=1)
-    dtbl.setStyle(TableStyle([
-        ("BACKGROUND",     (0, 0), (-1, 0), DARK_HEADER),
-        ("GRID",           (0, 0), (-1, -1), 0.4, BORDER),
-        ("PADDING",        (0, 0), (-1, -1), 4),
-        ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, SLATE_LIGHT]),
-    ]))
-    story.append(dtbl)
-    story.append(Spacer(1, 8))
+        dtbl = Table(d_rows, colWidths=d_widths, repeatRows=1)
+        dtbl.setStyle(TableStyle([
+            ("BACKGROUND",     (0, 0), (-1, 0), DARK_HEADER),
+            ("GRID",           (0, 0), (-1, -1), 0.4, BORDER),
+            ("PADDING",        (0, 0), (-1, -1), 4),
+            ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, SLATE_LIGHT]),
+        ]))
+        story.append(dtbl)
+        story.append(Spacer(1, 8))
 
     # ═══════════════════════════════════════════════════════════════════════════
     # NEXT SECTION: PROBLEM ANALYSIS (FOR EVERY DETECTED DEFECT)
@@ -439,9 +400,9 @@ def generate_pdf_report(data: dict) -> bytes:
 
     _section_header(story, "PROBLEM / FAILURE ANALYSIS", T_h2, 0)
 
-    if not defects:
+    if not defects or total_defects == 0:
         clean_box = Table([[
-            Paragraph("<b>Problem Analysis:</b> No target welding defects were detected in this specimen. All indications are AI visual estimates to be verified by a qualified inspector.", T_body)
+            Paragraph("<b>Problem Analysis:</b> No target welding defects were detected in this specimen. All 12 defect categories evaluated with zero positive indications.", T_body)
         ]], colWidths=[175 * mm])
         clean_box.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), GREEN_LIGHT),

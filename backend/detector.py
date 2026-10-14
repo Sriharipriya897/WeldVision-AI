@@ -268,6 +268,27 @@ CLASS_SEVERITY_MAP = {
 }
 
 
+# Configured inference thresholds
+CONF_THRESHOLD = 0.25
+IOU_THRESHOLD = 0.45
+
+# ─── Centralized Visual Screening Score Bands ─────────────────────────────────
+# Non-destructive demo screening bands (not certified welding acceptance criteria)
+STATUS_BAND_NO_INDICATIONS = "No Significant Visual Indications Detected"  # 90–100
+STATUS_BAND_REVIEW_REQUIRED = "Review Required"                             # 75–89
+STATUS_BAND_SIGNIFICANT     = "Significant Indications — Detailed Review Required"  # 50–74
+STATUS_BAND_HIGH_CONCERN    = "High Concern — Urgent Inspection Required"  # Below 50
+
+# Configured severity base penalties for AI visual screening
+SEVERITY_BASE_PENALTY = {
+    "Critical": 32.0,
+    "High":     18.0,
+    "Medium":   10.0,
+    "Low":      4.0
+}
+
+
+
 # ─── Main AI YOLO11 Segmentation Detector ─────────────────────────────────────
 
 class WeldDetector(BaseDetector):
@@ -317,8 +338,9 @@ class WeldDetector(BaseDetector):
 
     def _suppress_duplicate_detections(self, detections: list, iou_thresh: float = 0.45, overlap_thresh: float = 0.60) -> list:
         """
-        Suppresses heavily overlapping or duplicate detections of the same defect class,
+        Suppresses heavily overlapping or duplicate detections,
         keeping the higher confidence instance or the more complete segmentation.
+        Prevents counting duplicate boxes or masks covering the same physical indication as separate defects.
         """
         if not detections or len(detections) <= 1:
             return detections
@@ -334,11 +356,8 @@ class WeldDetector(BaseDetector):
 
             should_suppress = False
             for k in keep:
-                # Suppress duplicates of same type
-                if k["type"] != d_type:
-                    continue
-
                 k_box = k["bbox"]
+                same_type = (k["type"] == d_type)
 
                 # 1. Standard IoU & Overlap ratio
                 xA = max(d_box[0], k_box[0])
@@ -350,6 +369,10 @@ class WeldDetector(BaseDetector):
                 inter_h = max(0, yB - yA)
                 inter_area = inter_w * inter_h
 
+                k_cx, k_cy = k.get("center", [k_box[0] + k_box[2] // 2, k_box[1] + k_box[3] // 2])
+                center_dist = ((d_cx - k_cx) ** 2 + (d_cy - k_cy) ** 2) ** 0.5
+                diag_k = (k_box[2] ** 2 + k_box[3] ** 2) ** 0.5
+
                 if inter_area > 0:
                     area_d = d_box[2] * d_box[3]
                     area_k = k_box[2] * k_box[3]
@@ -357,15 +380,23 @@ class WeldDetector(BaseDetector):
                     iou = inter_area / float(union_area) if union_area > 0 else 0.0
                     overlap_ratio = inter_area / float(min(area_d, area_k)) if min(area_d, area_k) > 0 else 0.0
 
-                    if iou >= iou_thresh or overlap_ratio >= overlap_thresh:
-                        should_suppress = True
-                        break
+                    if same_type:
+                        if iou >= iou_thresh or overlap_ratio >= overlap_thresh:
+                            should_suppress = True
+                            break
+                    else:
+                        # Cross-class duplicate suppression: if two boxes heavily cover the exact same physical indication, keep the higher confidence one
+                        if iou >= 0.50 or overlap_ratio >= 0.65:
+                            should_suppress = True
+                            break
 
-                # 2. Tight center proximity for small clustered spots
-                k_cx, k_cy = k.get("center", [k_box[0] + k_box[2] // 2, k_box[1] + k_box[3] // 2])
-                center_dist = ((d_cx - k_cx) ** 2 + (d_cy - k_cy) ** 2) ** 0.5
-                diag_k = (k_box[2] ** 2 + k_box[3] ** 2) ** 0.5
-                if center_dist < max(14, diag_k * 0.45):
+                # 2. Tight center proximity for small clustered spots of same type
+                if same_type and center_dist < max(14, diag_k * 0.45):
+                    should_suppress = True
+                    break
+
+                # Or cross-class duplicate where centers are practically identical (within 8 px) with positive overlap
+                if not same_type and center_dist < 8 and inter_area > 0:
                     should_suppress = True
                     break
 
@@ -383,8 +414,8 @@ class WeldDetector(BaseDetector):
         # Run real YOLO11 Segmentation inference with balanced confidence and NMS settings
         results = self.model.predict(
             img_bgr,
-            conf=0.30,
-            iou=0.45,
+            conf=CONF_THRESHOLD,
+            iou=IOU_THRESHOLD,
             max_det=50,
             imgsz=640,
             device=self.device,
@@ -403,7 +434,7 @@ class WeldDetector(BaseDetector):
             for i in range(len(boxes)):
                 cls_id = int(boxes.cls[i].item())
                 conf = float(boxes.conf[i].item())
-                if conf < 0.30:
+                if conf < CONF_THRESHOLD:
                     continue
                 cls_name = self.model.names.get(cls_id, f"Defect_{cls_id}")
 
@@ -489,6 +520,20 @@ class WeldDetector(BaseDetector):
         # Apply IoU and proximity deduplication to suppress redundant overlapping detections
         filtered_detections = self._suppress_duplicate_detections(raw_detections, iou_thresh=0.45, overlap_thresh=0.60)
         defects = sorted(filtered_detections, key=lambda d: (-d["confidence"], d["id_num"] if "id_num" in d else 0))
+
+        if not defects:
+            return self._clean_weld_result(
+                img_bgr=img_bgr,
+                w=w,
+                h=h,
+                filename=filename,
+                inspection_id=inspection_id,
+                inspection_date=inspection_date,
+                inspection_time=inspection_time,
+                inspection_timestamp=inspection_timestamp,
+                good_welding_count=good_welding_count,
+                detected_classes_count=detected_classes_count
+            )
 
         # Separate Detected Classes from Active Defects
         active_breakdown = {}
@@ -584,19 +629,17 @@ class WeldDetector(BaseDetector):
         low_count      = sum(1 for d in defects if d["severity"] == "Low")
 
         quality_score = self._compute_weld_quality_score(defects, defective_area_pct)
-        condition_info = self._get_condition_label(quality_score, defects, confirmed_defects_count)
-        acceptance_status = self._determine_acceptance_status(
-            quality_score, critical_count, high_count, medium_count, total_defects,
-            confirmed_count=confirmed_defects_count, review_count=review_required_count
-        )
+        screening_status = self._determine_screening_status(quality_score, total_defects)
+        acceptance_status = screening_status
+        condition_info = self._get_condition_label(quality_score, defects)
         overall_severity = self._determine_overall_severity(
             critical_count, high_count, medium_count, defective_area_pct,
-            confirmed_count=confirmed_defects_count
+            score=quality_score, confirmed_count=confirmed_defects_count
         )
         overall_risk = overall_severity
         repair_priority = self._determine_overall_repair_priority(
             critical_count, high_count, medium_count, defects,
-            confirmed_count=confirmed_defects_count
+            score=quality_score, status=screening_status
         )
 
         dominant_type = max(set(d["type"] for d in defects), key=lambda t: sum(1 for d in defects if d["type"] == t))
@@ -618,17 +661,17 @@ class WeldDetector(BaseDetector):
 
         # Build dynamic conclusion & quality assessment explanation using ONLY actual detections
         conclusion_text = self._generate_weld_conclusion(
-            defects, active_breakdown, acceptance_status, critical_count, high_count,
+            defects, active_breakdown, screening_status, critical_count, high_count,
             confirmed_count=confirmed_defects_count, review_count=review_required_count,
-            possible_count=possible_indications_count
+            possible_count=possible_indications_count, score=quality_score
         )
         quality_explanation = self._generate_quality_explanation(
-            quality_score, acceptance_status, overall_severity, defects, active_breakdown,
+            quality_score, screening_status, overall_severity, defects, active_breakdown,
             confirmed_count=confirmed_defects_count, review_count=review_required_count,
-            possible_count=possible_indications_count
+            possible_count=possible_indications_count, defective_area_pct=defective_area_pct
         )
         verdict = self._generate_weld_verdict(
-            defects, defective_area_pct, quality_score, acceptance_status, dominant_type,
+            defects, defective_area_pct, quality_score, screening_status, dominant_type,
             confirmed_count=confirmed_defects_count
         )
 
@@ -743,11 +786,12 @@ class WeldDetector(BaseDetector):
 
     def _build_12_class_inspection(self, defects: list) -> list:
         """
-        Builds complete 12-class inspection result cards.
-        Always displays all 12 target defect classes.
-        Genuine YOLO predictions are populated for actually detected classes.
-        Non-detected classes are marked with honest visual screening statuses.
+        Builds inspection cards ONLY for the actual detected defect classes.
+        Classes with zero detections are omitted per inspection filtering rules.
         """
+        if not defects:
+            return []
+
         alias_map = {
             "Excess Reinforcement": "Excessive Weld Reinforcement",
             "Spatters": "Spatter",
@@ -763,151 +807,49 @@ class WeldDetector(BaseDetector):
                 dets_by_class[cname] = []
             dets_by_class[cname].append(d)
 
-        target_classes_config = [
-            {
-                "class_name": "Slag Inclusion",
-                "status_type": "not_detected",
-                "default_status": "No visible indication detected",
-                "explanation": "Slag inclusion refers to non-metallic material trapped within the weld metal.",
-                "recommendation": "No clear surface indication identified in the uploaded image. Further NDT may be required for internal verification."
-            },
-            {
-                "class_name": "Undercut",
-                "status_type": "not_detected",
-                "default_status": "No visible indication detected",
-                "explanation": "Undercut is a groove melted into the base metal near the weld toe or root and left insufficiently filled.",
-                "recommendation": "No clear undercut indication identified in the available image."
-            },
-            {
-                "class_name": "Porosity",
-                "status_type": "not_detected",
-                "default_status": "No visible indication detected",
-                "explanation": "Porosity refers to gas cavities or pinhole-like voids within the weld metal.",
-                "recommendation": "No clear porosity indication identified in the uploaded image."
-            },
-            {
-                "class_name": "Incomplete Fusion",
-                "status_type": "not_detected",
-                "default_status": "No visible indication detected",
-                "explanation": "Incomplete fusion occurs when weld metal does not properly fuse with the base metal or an adjacent weld pass.",
-                "recommendation": "No clear visible indication identified. Internal verification may be required."
-            },
-            {
-                "class_name": "Overlap",
-                "status_type": "not_detected",
-                "default_status": "No visible indication detected",
-                "explanation": "Overlap occurs when weld metal extends beyond the weld toe or root without proper fusion.",
-                "recommendation": "No clear overlap indication identified in the available image."
-            },
-            {
-                "class_name": "Underfill",
-                "status_type": "not_detected",
-                "default_status": "No visible indication detected",
-                "explanation": "Underfill occurs when the weld face or root surface remains below the adjacent base-metal surface.",
-                "recommendation": "Profile inspection recommended if the weld geometry is unclear."
-            },
-            {
-                "class_name": "Spatter",
-                "status_type": "not_detected",
-                "default_status": "No visible indication detected",
-                "explanation": "Spatter consists of unwanted droplets of molten weld metal deposited around the weld.",
-                "recommendation": "No significant spatter indication identified."
-            },
-            {
-                "class_name": "Excessive Convexity",
-                "status_type": "verification",
-                "default_status": "Profile Inspection Required",
-                "explanation": "Excessive convexity refers to an excessively bulged weld profile or excessive weld metal buildup.",
-                "recommendation": "Verify weld profile and reinforcement dimensions."
-            },
-            {
-                "class_name": "Excessive Concavity",
-                "status_type": "verification",
-                "default_status": "Profile Inspection Required",
-                "explanation": "Excessive concavity refers to an excessively hollow or depressed weld profile.",
-                "recommendation": "Verify weld geometry and effective throat/profile dimensions."
-            },
-            {
-                "class_name": "Excessive Weld Reinforcement",
-                "status_type": "not_detected",
-                "default_status": "No clear excessive reinforcement indication detected",
-                "explanation": "Excessive weld reinforcement occurs when weld metal extends beyond the required weld profile.",
-                "recommendation": "Verify reinforcement height against the applicable welding specification."
-            },
-            {
-                "class_name": "Incomplete Penetration",
-                "status_type": "verification",
-                "default_status": "Root-Side Verification Required",
-                "explanation": "Incomplete penetration occurs when the weld does not achieve the required penetration through the joint root.",
-                "recommendation": "Root-side inspection or suitable NDT is recommended. Do not claim confirmation from a surface image alone."
-            },
-            {
-                "class_name": "Excessive Penetration",
-                "status_type": "verification",
-                "default_status": "Root Profile Verification Required",
-                "explanation": "Excessive penetration occurs when weld metal extends through the root beyond the required amount.",
-                "recommendation": "Verify the root profile using appropriate visual/root-side inspection or NDT."
-            }
-        ]
-
-        twelve_cards = []
-        for target in target_classes_config:
-            cname = target["class_name"]
-            if cname in dets_by_class and len(dets_by_class[cname]) > 0:
-                class_dets = dets_by_class[cname]
-                top_det = max(class_dets, key=lambda d: d.get("confidence", 0.0))
-                conf_val = top_det.get("confidence", 0.0)
-                conf_pct = int(round(conf_val * 100))
-                
-                if conf_val >= 0.50:
-                    status_str = "DETECTED"
-                    sev_tier = top_det.get("severity", CLASS_SEVERITY_MAP.get(cname, "High"))
-                else:
-                    status_str = "DETECTED (Review Required)"
-                    sev_tier = "Review Required"
-
-                obs = top_det.get("observation") or f"Localized {cname.lower()} indications identified in the weld region."
-                causes = top_det.get("possible_cause") or WELD_DEFECT_METADATA.get(cname, {}).get("possible_cause", "Welding parameters or atmospheric conditions.")
-                rec = top_det.get("recommended_action") or "Visually verify the indicated region and perform NDT when required."
-
-                card = {
-                    "class_name": cname,
-                    "category": "detected",
-                    "status_type": "detected",
-                    "status": status_str,
-                    "confidence": conf_pct,
-                    "confidence_raw": conf_val,
-                    "count": len(class_dets),
-                    "severity": sev_tier,
-                    "location": top_det.get("location", top_det.get("region", "Weld region")),
-                    "observation": _clean_svg_text(obs),
-                    "explanation": target["explanation"],
-                    "possible_causes": _clean_svg_text(causes),
-                    "recommendation": _clean_svg_text(rec),
-                    "bbox": top_det.get("bbox"),
-                    "detections": class_dets
-                }
+        cards = []
+        for cname, class_dets in dets_by_class.items():
+            if not class_dets:
+                continue
+            top_det = max(class_dets, key=lambda d: d.get("confidence", 0.0))
+            conf_val = top_det.get("confidence", 0.0)
+            conf_pct = int(round(conf_val * 100))
+            
+            if conf_val >= 0.50:
+                status_str = "DETECTED"
+                sev_tier = top_det.get("severity", CLASS_SEVERITY_MAP.get(cname, "High"))
             else:
-                card = {
-                    "class_name": cname,
-                    "category": target["status_type"],
-                    "status_type": target["status_type"],
-                    "status": target["default_status"],
-                    "confidence": None,
-                    "confidence_raw": None,
-                    "count": 0,
-                    "severity": CLASS_SEVERITY_MAP.get(cname, "Low"),
-                    "location": None,
-                    "observation": None,
-                    "explanation": target["explanation"],
-                    "possible_causes": None,
-                    "recommendation": target["recommendation"],
-                    "bbox": None,
-                    "detections": []
-                }
-            twelve_cards.append(card)
+                status_str = "DETECTED (Review Required)"
+                sev_tier = "Review Required"
 
-        return twelve_cards
+            obs = top_det.get("observation") or f"Localized {cname.lower()} indications identified in the weld region."
+            meta = WELD_DEFECT_METADATA.get(cname, {})
+            explain = meta.get("explain", f"{cname} discontinuity detected in weld.")
+            causes = top_det.get("possible_cause") or meta.get("possible_cause", "Welding parameters or atmospheric conditions.")
+            rec = top_det.get("recommended_action") or meta.get("recommended_action", "Visually verify the indicated region and perform NDT when required.")
+
+            card = {
+                "class_name": cname,
+                "category": "detected",
+                "status_type": "detected",
+                "status": status_str,
+                "confidence": conf_pct,
+                "confidence_raw": conf_val,
+                "count": len(class_dets),
+                "severity": sev_tier,
+                "location": top_det.get("location", top_det.get("region", "Weld region")),
+                "observation": _clean_svg_text(obs),
+                "explanation": explain,
+                "possible_causes": _clean_svg_text(causes),
+                "recommendation": _clean_svg_text(rec),
+                "bbox": top_det.get("bbox"),
+                "detections": class_dets
+            }
+            cards.append(card)
+
+        # Sort descending by top confidence
+        cards.sort(key=lambda c: -c["confidence_raw"])
+        return cards
 
     def _build_defect_dict(self, cid, dtype, sev, x, y, cw, ch, pct, conf, img_w, img_h, mask_pts=None):
         cx, cy = int(x + cw // 2), int(y + ch // 2)
@@ -1107,164 +1049,126 @@ class WeldDetector(BaseDetector):
 
     def _compute_weld_quality_score(self, defects, defective_area_pct):
         """
-        Dynamically computes quality score using confidence-aware logic.
-        Confirmed defects (>=50%) drive penalties; <30% indications have minimal/zero penalty;
-        Good Welding has zero penalty.
+        Dynamically calculates the AI visual screening quality score from the final filtered YOLO detections.
+        Penalizes score according to:
+          - indication count (number of defects)
+          - detection confidence
+          - estimated affected area (area_pct)
+          - configured severity weights (Critical > High > Medium > Low)
+          - multi-defect compounding
+        Does not treat low confidence as proof of a sound weld.
+        Never assigns >=90 if any defect indication is detected.
         """
         if not defects:
             return 98
 
-        confirmed_defs = [d for d in defects if d.get("confidence", 0.0) >= 0.50]
-        review_defs = [d for d in defects if 0.30 <= d.get("confidence", 0.0) < 0.50]
-        possible_defs = [d for d in defects if d.get("confidence", 0.0) < 0.30]
+        num_defects = len(defects)
+        total_ind_penalty = 0.0
 
-        critical_confirmed = sum(1 for d in confirmed_defs if d["severity"] == "Critical")
-        high_confirmed = sum(1 for d in confirmed_defs if d["severity"] == "High")
-        medium_confirmed = sum(1 for d in confirmed_defs if d["severity"] == "Medium")
-        low_confirmed = sum(1 for d in confirmed_defs if d["severity"] == "Low")
+        for d in defects:
+            sev = d.get("severity", "Medium")
+            base_p = SEVERITY_BASE_PENALTY.get(sev, 10.0)
+            conf = float(d.get("confidence", 0.50))
+            # Confidence weighting factor: scales smoothly from 0.70 at conf=0.25 to 1.0 at conf=1.0.
+            # Ensures low-confidence detections still incur ~70-75% of base penalty (not ignored).
+            conf_weight = 0.60 + 0.40 * max(0.0, min(1.0, conf))
+            total_ind_penalty += base_p * conf_weight
 
-        score = 100.0
+        # Affected area penalty
+        tot_area = sum(float(d.get("area_pct", 0.0)) for d in defects)
+        area_penalty = min(20.0, tot_area * 1.5)
 
-        # Confirmed defect area penalty
-        confirmed_area = sum(d.get("area_pct", 0.0) for d in confirmed_defs)
-        score -= min(30.0, confirmed_area * 3.0)
+        # Multi-defect compounding penalty (each additional indication compounds the risk)
+        multi_penalty = min(18.0, (num_defects - 1) * 3.0) if num_defects > 1 else 0.0
 
-        # Penalties based on confirmed defects
-        for d in confirmed_defs:
-            sev = d["severity"]
-            conf = d.get("confidence", 0.5)
-            weight = max(0.5, min(1.0, conf))
-            if sev == "Critical":
-                score -= (32.0 * weight)
-            elif sev == "High":
-                score -= (18.0 * weight)
-            elif sev == "Medium":
-                score -= (7.0 * weight)
-            else:
-                score -= (2.0 * weight)
+        total_penalty = total_ind_penalty + area_penalty + multi_penalty
+        score = 100.0 - total_penalty
 
-        # Review-required (30-49.99%) minor penalty
-        for d in review_defs:
-            sev = d["severity"]
-            if sev == "Critical":
-                score -= 8.0
-            elif sev == "High":
-                score -= 5.0
-            elif sev == "Medium":
-                score -= 2.0
-            else:
-                score -= 0.5
+        # Safety & Threshold Rules:
+        # 1. Any detected indication prevents classification in 90-100 band ("No Significant Visual Indications Detected")
+        score = min(score, 89.0)
 
-        # Possible indications (<30%) minimal penalty (0.5 pt each, capped at 2.0)
-        score -= min(2.0, len(possible_defs) * 0.5)
+        # 2. Three or more indications represent significant cumulative visual concern -> max 74 (50-74 or lower)
+        if num_defects >= 3:
+            score = min(score, 74.0)
 
-        # Multi-defect compounding penalty ONLY if confirmed defects >= 2
-        if len(confirmed_defs) >= 4:
-            score -= 6.0
-        elif len(confirmed_defs) >= 2:
-            score -= 3.0
+        # 3. Confirmed critical defect (conf >= 0.50) -> max 45 (must be in Below 50: High Concern)
+        confirmed_crits = [d for d in defects if d.get("severity") == "Critical" and d.get("confidence", 0.0) >= 0.50]
+        if confirmed_crits:
+            score = min(score, 45.0)
+
+        # 4. Two or more confirmed high/critical defects -> max 48
+        confirmed_major = [d for d in defects if d.get("severity") in ("Critical", "High") and d.get("confidence", 0.0) >= 0.50]
+        if len(confirmed_major) >= 2:
+            score = min(score, 48.0)
 
         final_score = int(round(score))
-
-        # Strict Engineering Caps ONLY for confirmed defects:
-        if critical_confirmed > 0:
-            final_score = min(final_score, 42)
-        elif high_confirmed > 0:
-            final_score = min(final_score, 62)
-        elif medium_confirmed >= 3 or len(confirmed_defs) >= 4:
-            final_score = min(final_score, 74)
-        elif medium_confirmed > 0:
-            final_score = min(final_score, 82)
-        elif len(confirmed_defs) == 0:
-            # If no confirmed defects at all, score must remain high
-            if len(review_defs) > 0:
-                final_score = max(80, min(92, final_score))
-            else:
-                final_score = max(90, min(96, final_score))
-
         return max(5, min(98, final_score))
 
-    def _get_condition_label(self, score, defects=None, confirmed_count=0):
-        if defects and confirmed_count > 0:
-            confirmed_defs = [d for d in defects if d.get("confidence", 0.0) >= 0.50]
-            critical_cnt = sum(1 for d in confirmed_defs if d["severity"] == "Critical")
-            high_cnt     = sum(1 for d in confirmed_defs if d["severity"] == "High")
-            medium_cnt   = sum(1 for d in confirmed_defs if d["severity"] == "Medium")
-            if critical_cnt > 0 or score < 45:
-                return {"label": "Severe Discontinuity", "desc": "Critical weld discontinuity detected requiring evaluation"}
-            if high_cnt > 0 or score < 60:
-                return {"label": "Poor", "desc": "Significant defect indications requiring rework"}
-            if medium_cnt >= 2 or len(confirmed_defs) >= 3 or score < 75:
-                return {"label": "Sub-Standard", "desc": "Multiple surface defect indications detected"}
-            if score < 85:
-                return {"label": "Moderate / Needs Review", "desc": "Surface indications require cleaning or rework"}
-
-        if score >= 90:
-            return {"label": "Nominal", "desc": "Clean weld bead with no major defect indications"}
-        elif score >= 78:
-            return {"label": "Good", "desc": "Sound weld bead with minimal cosmetic indications"}
-        elif score >= 60:
-            return {"label": "Acceptable", "desc": "Acceptable visual profile pending verification"}
-        elif score >= 45:
-            return {"label": "Poor", "desc": "Significant defect indications detected"}
+    def _determine_screening_status(self, score: int, total_defects: int = 0) -> str:
+        """
+        Centralized screening score bands:
+          90–100: No Significant Visual Indications Detected
+          75–89:  Review Required
+          50–74:  Significant Indications — Detailed Review Required
+          < 50:   High Concern — Urgent Inspection Required
+        """
+        if total_defects == 0 or score >= 90:
+            return STATUS_BAND_NO_INDICATIONS
+        elif score >= 75:
+            return STATUS_BAND_REVIEW_REQUIRED
+        elif score >= 50:
+            return STATUS_BAND_SIGNIFICANT
         else:
-            return {"label": "Severe Discontinuity", "desc": "Weld joint requires engineering review"}
+            return STATUS_BAND_HIGH_CONCERN
 
-    def _determine_acceptance_status(self, score, critical_cnt, high_cnt, medium_cnt=0, total_defects=0, confirmed_count=0, review_count=0):
-        if confirmed_count == 0:
-            if review_count > 0:
-                return "Review Required"
-            elif total_defects > 0:
-                return "Verification Required"
-            else:
-                return "No Target Defect Detected"
-
-        # Driven by confirmed defects
-        confirmed_critical = critical_cnt if confirmed_count > 0 else 0
-        confirmed_high = high_cnt if confirmed_count > 0 else 0
-        if confirmed_critical > 0 or score < 45:
-            return "Rejected"
-        elif confirmed_high > 0 or score < 65:
-            return "Requires Repair"
-        elif medium_cnt > 0 or score < 88:
-            return "Accepted With Repair"
+    def _get_condition_label(self, score, defects=None):
+        if not defects or score >= 90:
+            return {"label": "Nominal", "desc": "Clean weld bead with no significant visual indications detected"}
+        elif score >= 75:
+            return {"label": "Review Required", "desc": "Visual indications detected requiring inspector verification"}
+        elif score >= 50:
+            return {"label": "Significant Indications", "desc": "Multiple or significant defect indications requiring detailed review"}
         else:
-            return "Accepted"
+            return {"label": "High Concern", "desc": "Critical defect indications or high indication density requiring urgent inspection"}
 
-    def _determine_overall_severity(self, critical_cnt, high_cnt, medium_cnt, defective_area_pct, confirmed_count=0):
-        if confirmed_count == 0:
-            return "Low"
-        if critical_cnt >= 1 or defective_area_pct > 20:
+    def _determine_acceptance_status(self, score, critical_cnt=0, high_cnt=0, medium_cnt=0, total_defects=0, **kwargs):
+        """Backward-compatibility wrapper pointing directly to centralized status bands."""
+        return self._determine_screening_status(score, total_defects)
+
+    def _determine_overall_severity(self, critical_cnt, high_cnt, medium_cnt, defective_area_pct, score=100, confirmed_count=0):
+        if critical_cnt >= 1 or score < 50 or defective_area_pct > 20:
             return "Critical"
-        elif high_cnt >= 1 or defective_area_pct > 10:
+        elif high_cnt >= 1 or score < 75 or defective_area_pct > 10:
             return "High"
-        elif medium_cnt >= 1 or defective_area_pct > 2:
+        elif medium_cnt >= 1 or score < 90 or defective_area_pct > 2:
             return "Medium"
         else:
             return "Low"
 
-    def _determine_overall_repair_priority(self, critical_cnt, high_cnt, medium_cnt, defects, confirmed_count=0):
-        if confirmed_count == 0:
-            if any(d.get("confidence", 0.0) >= 0.30 for d in defects):
-                return "Verification Required"
-            return "Manual Verification Recommended"
-
-        confirmed_defs = [d for d in defects if d.get("confidence", 0.0) >= 0.50]
-        if any(d["severity"] == "Critical" for d in confirmed_defs):
-            return "Immediate Repair"
-        elif any(d["severity"] == "High" for d in confirmed_defs):
-            return "Repair Before Use"
-        elif any(d["type"] in ("Excess Reinforcement", "Porosity") for d in confirmed_defs):
-            return "Grind / Blend Flush"
-        elif any("spatter" in d["type"].lower() for d in confirmed_defs):
-            return "Chisel / De-Spatter"
-        elif any(d["severity"] == "Medium" for d in confirmed_defs):
-            return "Repair / Clean Before Service"
-        else:
+    def _determine_overall_repair_priority(self, critical_cnt, high_cnt, medium_cnt, defects, score=100, status=""):
+        if not defects:
             return "No Action Required"
 
+        if status == STATUS_BAND_HIGH_CONCERN or score < 50 or critical_cnt > 0:
+            confirmed_crits = [d for d in defects if d.get("severity") == "Critical" and d.get("confidence", 0.0) >= 0.50]
+            if confirmed_crits:
+                return "Immediate Repair"
+            return "Urgent Inspection Required"
+
+        if status == STATUS_BAND_SIGNIFICANT or score < 75 or high_cnt > 0:
+            confirmed_high = [d for d in defects if d.get("severity") == "High" and d.get("confidence", 0.0) >= 0.50]
+            if confirmed_high:
+                return "Repair Before Use"
+            return "Detailed Review Required"
+
+        if status == STATUS_BAND_REVIEW_REQUIRED or score < 90:
+            return "Verification Required"
+
+        return "No Action Required"
+
     def _generate_weld_conclusion(self, defects, active_breakdown, acceptance_status, critical_cnt, high_cnt,
-                                  confirmed_count=0, review_count=0, possible_count=0):
+                                  confirmed_count=0, review_count=0, possible_count=0, score=100, **kwargs):
         """
         Dynamically constructs clear engineering conclusion mentioning ONLY actual detected defect types and counts.
         Never mentions un-detected defect classes.
@@ -1281,7 +1185,7 @@ class WeldDetector(BaseDetector):
         if not defects:
             return "AI visual screening identified no target defect indications in the inspected specimen. Final acceptance requires qualified inspection / CWI verification."
 
-        conclusion_parts = [f"Inspection identified {defect_summary_str} indication(s)."]
+        conclusion_parts = [f"AI visual screening identified {defect_summary_str} indication(s) in the inspected specimen."]
 
         if confirmed_count > 0:
             confirmed_types = list(dict.fromkeys(d["type"] for d in defects if d.get("confidence", 0.0) >= 0.50))
@@ -1291,61 +1195,78 @@ class WeldDetector(BaseDetector):
             else:
                 conclusion_parts.append(f"{conf_str}.")
         else:
-            conclusion_parts.append("All detected indications are below the confirmed-defect threshold (<50%) and require manual or NDT verification before concluding defect status.")
+            conclusion_parts.append("All detected indications are below the confirmed-defect confidence threshold (<50%) and require manual visual or NDT verification before concluding defect status.")
 
-        if acceptance_status == "Rejected":
+        # Map centralized status bands to engineering dispositions
+        if acceptance_status == STATUS_BAND_HIGH_CONCERN:
             actual_crits = [d["type"] for d in defects if d["severity"] == "Critical" and d.get("confidence", 0.0) >= 0.50]
-            crit_detail = f"critical discontinuity ({', '.join(set(actual_crits))})" if actual_crits else "severe defect accumulation"
-            conclusion_parts.append(f"Due to the presence of confirmed {crit_detail}, the joint is classified as Rejected and requires immediate engineering review.")
-        elif acceptance_status == "Requires Repair":
-            conclusion_parts.append("Repair and re-inspection are recommended for the confirmed defect zones prior to service acceptance.")
-        elif acceptance_status == "Accepted With Repair":
-            conclusion_parts.append("The weld is classified as Accepted With Repair, requiring designated surface dressing or rework.")
-        elif acceptance_status in ("Review Required", "Verification Required"):
-            conclusion_parts.append("Weld disposition is pending physical verification of the indicated regions.")
-        elif acceptance_status == "No Target Defect Detected":
-            conclusion_parts.append("No target welding defect indications detected by AI screening.")
+            crit_detail = f"critical discontinuity ({', '.join(set(actual_crits))})" if actual_crits else "high-density indication accumulation"
+            conclusion_parts.append(f"The AI screening score of {score}/100 places this weld in the HIGH CONCERN band. Presence of {crit_detail} requires immediate engineering review and NDT verification before service.")
+        elif acceptance_status == STATUS_BAND_SIGNIFICANT:
+            conclusion_parts.append(f"The AI screening score of {score}/100 places this weld in the SIGNIFICANT INDICATIONS band. Detailed inspector review and targeted NDT verification are recommended before final disposition.")
+        elif acceptance_status == STATUS_BAND_REVIEW_REQUIRED:
+            conclusion_parts.append(f"The AI screening score of {score}/100 places this weld in the REVIEW REQUIRED band. Weld disposition is pending physical verification of the indicated regions by a qualified inspector.")
         else:
-            conclusion_parts.append("Weld bead exhibits acceptable visual profile (AI visual screening).")
+            conclusion_parts.append("Weld bead exhibits an acceptable visual profile per AI screening (score 90–100). Final acceptance requires qualified inspection / CWI verification.")
+
+        conclusion_parts.append("This result is an AI visual screening only and does not constitute a certified weld-quality assessment or AWS D1.1 acceptance.")
 
         return " ".join(conclusion_parts)
 
     def _generate_quality_explanation(self, score, status, severity, defects, active_breakdown,
-                                      confirmed_count=0, review_count=0, possible_count=0):
+                                      confirmed_count=0, review_count=0, possible_count=0,
+                                      defective_area_pct=0.0):
         active_items = [f"{k} ({v})" for k, v in active_breakdown.items() if k != "Good Welding"]
         defect_list_str = ", ".join(active_items) if active_items else "None"
         if not defects:
-            return f"A screening score of {score}/100 and status of '{status}' was assigned because zero active defect indications were detected."
+            return (f"AI visual screening score of {score}/100 was assigned because zero active defect indications "
+                    f"were detected. Status: {status}.")
 
+        area_note = f" Estimated defective area: {defective_area_pct:.1f}%." if defective_area_pct > 0 else ""
         return (
-            f"A quality score of {score}/100 and overall status of '{status}' was assigned based on {len(defects)} indication(s): "
-            f"{defect_list_str} ({confirmed_count} confirmed defect(s), {review_count} review required, {possible_count} possible indication(s)). "
-            f"Scoring is dynamically weighted by confidence tier and severity without penalizing unconfirmed indications."
+            f"AI visual screening score of {score}/100 (status: '{status}') was dynamically computed from "
+            f"{len(defects)} indication(s): {defect_list_str} "
+            f"({confirmed_count} confirmed >=50%, {review_count} review required, {possible_count} possible)."
+            f"{area_note} Score is penalized by severity weight, detection confidence, affected area, and "
+            f"multi-indication compounding. Score does not represent certified weld quality."
         )
 
     def _generate_weld_verdict(self, defects, dam_pct, score, acceptance, dominant_type, confirmed_count=0):
         if not defects:
-            return "NO TARGET DEFECT DETECTED. AI screening result — manual/CWI verification recommended."
+            return "NO DEFECT INDICATIONS DETECTED. AI visual screening result — manual/CWI verification recommended."
 
         actual_types = list(dict.fromkeys(d["type"] for d in defects))
         types_str = ", ".join(actual_types[:4])
 
-        if confirmed_count == 0:
+        if acceptance == STATUS_BAND_NO_INDICATIONS:
             return (
-                f"The inspected weld contains {len(defects)} tentative indication(s) ({types_str}) pending verification. "
-                f"Weld Quality Score is {score}/100 with an overall status of '{acceptance}'. "
-                f"Visual verification by a qualified inspector is recommended before rework."
+                f"AI screening detected {len(defects)} low-confidence indication(s) ({types_str}). "
+                f"Screening score is {score}/100. Visual verification recommended before final acceptance."
             )
 
-        repair_str = "Immediate repair is required prior to load service." if acceptance == "Rejected" else (
-            "Repair is required prior to final acceptance." if acceptance == "Requires Repair" else
-            "The weld is acceptable with minor scheduled rework recommended."
-        )
+        if acceptance == STATUS_BAND_REVIEW_REQUIRED:
+            return (
+                f"The inspected weld contains {len(defects)} indication(s) ({types_str}) requiring inspector review. "
+                f"AI visual screening score: {score}/100. "
+                f"Physical verification of indicated regions by a qualified inspector is required before disposition."
+            )
+
+        if acceptance == STATUS_BAND_SIGNIFICANT:
+            return (
+                f"The inspected weld contains {len(defects)} significant indication(s) including {types_str}. "
+                f"Estimated defective area: {dam_pct:.1f}%. AI screening score: {score}/100. "
+                f"Detailed review and targeted NDT are recommended before acceptance."
+            )
+
+        # STATUS_BAND_HIGH_CONCERN
+        action = "Immediate inspection and NDT are required before any service application."
+        if confirmed_count > 0:
+            confirmed_crits = [d for d in defects if d.get("severity") == "Critical" and d.get("confidence", 0) >= 0.50]
+            if confirmed_crits:
+                action = f"Confirmed critical indication ({confirmed_crits[0]['type']}) detected. Immediate engineering review and repair are required."
         return (
-            f"The inspected weld contains {len(defects)} defect indication(s) including {types_str}. "
-            f"Estimated defective area is {dam_pct}%. "
-            f"Weld Quality Score is {score}/100 with an overall status of '{acceptance}'. "
-            f"{repair_str}"
+            f"HIGH CONCERN: The inspected weld contains {len(defects)} indication(s) including {types_str}. "
+            f"Estimated defective area: {dam_pct:.1f}%. AI screening score: {score}/100. {action}"
         )
 
     def _clean_weld_result(self, img_bgr, w, h, filename, inspection_id, inspection_date, inspection_time, inspection_timestamp, good_welding_count=0, detected_classes_count=None):

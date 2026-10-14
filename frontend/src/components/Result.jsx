@@ -27,93 +27,7 @@ const STATUS_BADGES = {
   "No Target Defect Detected": { bg: '#ECFDF5', text: '#047857', border: '#10B981', icon: CheckCircle2 },
 };
 
-// Default 12 target class definitions for robust fallback
-const DEFAULT_12_CLASSES = [
-  {
-    class_name: "Slag Inclusion",
-    status_type: "not_detected",
-    default_status: "No visible indication detected",
-    explanation: "Slag inclusion refers to non-metallic material trapped within the weld metal.",
-    recommendation: "No clear surface indication identified in the uploaded image. Further NDT may be required for internal verification."
-  },
-  {
-    class_name: "Undercut",
-    status_type: "not_detected",
-    default_status: "No visible indication detected",
-    explanation: "Undercut is a groove melted into the base metal near the weld toe or root and left insufficiently filled.",
-    recommendation: "No clear undercut indication identified in the available image."
-  },
-  {
-    class_name: "Porosity",
-    status_type: "not_detected",
-    default_status: "No visible indication detected",
-    explanation: "Porosity refers to gas cavities or pinhole-like voids within the weld metal.",
-    recommendation: "No clear porosity indication identified in the uploaded image."
-  },
-  {
-    class_name: "Incomplete Fusion",
-    status_type: "not_detected",
-    default_status: "No visible indication detected",
-    explanation: "Incomplete fusion occurs when weld metal does not properly fuse with the base metal or an adjacent weld pass.",
-    recommendation: "No clear visible indication identified. Internal verification may be required."
-  },
-  {
-    class_name: "Overlap",
-    status_type: "not_detected",
-    default_status: "No visible indication detected",
-    explanation: "Overlap occurs when weld metal extends beyond the weld toe or root without proper fusion.",
-    recommendation: "No clear overlap indication identified in the available image."
-  },
-  {
-    class_name: "Underfill",
-    status_type: "not_detected",
-    default_status: "No visible indication detected",
-    explanation: "Underfill occurs when the weld face or root surface remains below the adjacent base-metal surface.",
-    recommendation: "Profile inspection recommended if the weld geometry is unclear."
-  },
-  {
-    class_name: "Spatter",
-    status_type: "not_detected",
-    default_status: "No visible indication detected",
-    explanation: "Spatter consists of unwanted droplets of molten weld metal deposited around the weld.",
-    recommendation: "No significant spatter indication identified."
-  },
-  {
-    class_name: "Excessive Convexity",
-    status_type: "verification",
-    default_status: "Profile Inspection Required",
-    explanation: "Excessive convexity refers to an excessively bulged weld profile or excessive weld metal buildup.",
-    recommendation: "Verify weld profile and reinforcement dimensions."
-  },
-  {
-    class_name: "Excessive Concavity",
-    status_type: "verification",
-    default_status: "Profile Inspection Required",
-    explanation: "Excessive concavity refers to an excessively hollow or depressed weld profile.",
-    recommendation: "Verify weld geometry and effective throat/profile dimensions."
-  },
-  {
-    class_name: "Excessive Weld Reinforcement",
-    status_type: "not_detected",
-    default_status: "No clear excessive reinforcement indication detected",
-    explanation: "Excessive weld reinforcement occurs when weld metal extends beyond the required weld profile.",
-    recommendation: "Verify reinforcement height against the applicable welding specification."
-  },
-  {
-    class_name: "Incomplete Penetration",
-    status_type: "verification",
-    default_status: "Root-Side Verification Required",
-    explanation: "Incomplete penetration occurs when the weld does not achieve the required penetration through the joint root.",
-    recommendation: "Root-side inspection or suitable NDT is recommended. Do not claim confirmation from a surface image alone."
-  },
-  {
-    class_name: "Excessive Penetration",
-    status_type: "verification",
-    default_status: "Root Profile Verification Required",
-    explanation: "Excessive penetration occurs when weld metal extends through the root beyond the required amount.",
-    recommendation: "Verify the root profile using appropriate visual/root-side inspection or NDT."
-  }
-];
+
 
 function cleanText(val) {
   if (!val) return '';
@@ -197,63 +111,10 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
   const statusCfg = STATUS_BADGES[status] || STATUS_BADGES["Accepted"];
   const StatusIcon = statusCfg.icon;
 
-  // Build or extract the 12-class inspection list
-  const twelveCards = result.twelve_class_inspection || (() => {
-    const aliasMap = {
-      "Excess Reinforcement": "Excessive Weld Reinforcement",
-      "Spatters": "Spatter",
-      "Lack of Fusion": "Incomplete Fusion",
-      "Lack of Penetration": "Incomplete Penetration"
-    };
-    const detsByClass = {};
-    for (const d of defects) {
-      const cname = aliasMap[d.type] || d.type || d.class_name;
-      if (!detsByClass[cname]) detsByClass[cname] = [];
-      detsByClass[cname].push(d);
-    }
-    return DEFAULT_12_CLASSES.map(target => {
-      const cname = target.class_name;
-      if (detsByClass[cname] && detsByClass[cname].length > 0) {
-        const classDets = detsByClass[cname];
-        const topDet = classDets.reduce((prev, curr) => (curr.confidence > prev.confidence ? curr : prev), classDets[0]);
-        const confVal = topDet.confidence || 0.0;
-        const confPct = Math.round(confVal * 100);
-        return {
-          class_name: cname,
-          category: 'detected',
-          status_type: 'detected',
-          status: confVal >= 0.50 ? 'DETECTED' : 'DETECTED (Review Required)',
-          confidence: confPct,
-          confidence_raw: confVal,
-          count: classDets.length,
-          severity: topDet.severity || (confVal >= 0.50 ? 'High' : 'Review Required'),
-          location: topDet.location || topDet.region || 'Weld region',
-          observation: cleanText(topDet.observation || `Localized ${cname.toLowerCase()} indications identified in the weld region.`),
-          explanation: target.explanation,
-          possible_causes: cleanText(topDet.possible_cause || 'Moisture, contamination, inadequate shielding or unstable welding conditions.'),
-          recommendation: cleanText(topDet.recommended_action || 'Visually verify the indicated region and perform NDT when required.'),
-          bbox: topDet.bbox,
-          detections: classDets
-        };
-      }
-      return {
-        class_name: cname,
-        category: target.status_type,
-        status_type: target.status_type,
-        status: target.default_status,
-        confidence: null,
-        count: 0,
-        severity: 'Low',
-        location: null,
-        observation: null,
-        explanation: target.explanation,
-        possible_causes: null,
-        recommendation: target.recommendation,
-        bbox: null,
-        detections: []
-      };
-    });
-  })();
+  // Extract only the actual detected defect cards from result
+  const detectedCards = (result.twelve_class_inspection || []).filter(
+    card => card.category === 'detected' || card.status_type === 'detected' || (card.status && card.status.includes('DETECTED')) || (card.count && card.count > 0)
+  );
 
   const getCurrentImage = () => {
     if (activeTab === 'original') return result.original_image;
@@ -420,133 +281,129 @@ export default function Result({ result, onReset, isDownloadingPdf, onDownloadPd
         </div>
       </Card>
 
-      {/* ── SECTION 3: 12-CLASS WELD DEFECT INSPECTION ───────────────────── */}
+      {/* ── SECTION 3: DETECTED WELD DEFECTS ───────────────────── */}
       <Card className="p-6">
         <SectionTitle
           icon={ShieldAlert}
-          label="12-Class Weld Defect Inspection Summary"
+          label={totalDetectedIndications > 0 ? `Detected Weld Defects (${totalDetectedIndications})` : "Defect Detection Results"}
           right={
             <span className="text-xs text-slate-400 font-semibold">
-              Comprehensive 12-Class Visual Screening Catalogue
+              {totalDetectedIndications > 0 ? `${detectedCards.length} Defect Categor${detectedCards.length > 1 ? 'ies' : 'y'} Identified` : '12 Defect Categories Checked'}
             </span>
           }
         />
 
-        <p className="text-xs text-slate-500 mb-6 font-medium">
-          Every uploaded weld joint is screened against all 12 target defect classes. Real model indications display actual YOLO evidence; non-detected classes provide technical screening rationale and verification criteria.
-        </p>
+        {totalDetectedIndications === 0 || detectedCards.length === 0 ? (
+          <div className="p-8 rounded-2xl bg-emerald-50/70 border border-emerald-200/80 text-center space-y-3">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-600 mx-auto shadow-xs">
+              <CheckCircle className="w-8 h-8" />
+            </div>
+            <h4 className="text-lg font-black text-emerald-900 tracking-tight">
+              No Target Defects Detected
+            </h4>
+            <p className="text-xs text-emerald-700 max-w-xl mx-auto leading-relaxed font-medium">
+              YOLO11 visual screening evaluated the specimen across all 12 supported welding defect categories (Slag Inclusion, Undercut, Porosity, Incomplete Fusion, Overlap, Underfill, Spatter, Excessive Convexity, Excessive Concavity, Excessive Weld Reinforcement, Incomplete Penetration, Excessive Penetration). Zero defect indications met or exceeded the detection threshold.
+            </p>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-bold bg-white text-emerald-800 border border-emerald-300">
+              Total Filtered Defect Count: 0
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="text-xs text-slate-500 mb-6 font-medium">
+              Displaying only defects confirmed by YOLO11 segmentation passing the confidence threshold and deduplication filtering.
+            </p>
 
-        {/* 12 Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {twelveCards.map((card, idx) => {
-            const isDetected = card.category === 'detected' || card.status_type === 'detected' || (card.status && card.status.includes('DETECTED'));
-            const isVerification = card.category === 'verification' || card.status_type === 'verification' || (card.status && (card.status.includes('Required') || card.status.includes('Recommended')));
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {detectedCards.map((card, idx) => {
+                return (
+                  <div
+                    key={card.class_name || idx}
+                    className="p-4 rounded-xl border transition-all space-y-3 bg-red-50/40 border-red-200 hover:border-red-300"
+                  >
+                    {/* Card Top Row */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-lg bg-red-100 text-red-800 text-[11px] font-black flex items-center justify-center shrink-0">
+                          {idx + 1}
+                        </span>
+                        <h4 className="text-sm font-extrabold text-slate-900">{card.class_name}</h4>
+                      </div>
 
-            return (
-              <div
-                key={card.class_name || idx}
-                className={`p-4 rounded-xl border transition-all space-y-3 ${
-                  isDetected
-                    ? 'bg-red-50/40 border-red-200 hover:border-red-300'
-                    : isVerification
-                    ? 'bg-amber-50/40 border-amber-200 hover:border-amber-300'
-                    : 'bg-slate-50/70 border-slate-200 hover:border-slate-300'
-                }`}
-              >
-                {/* Card Top Row */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-lg bg-slate-200/70 text-slate-700 text-[11px] font-black flex items-center justify-center shrink-0">
-                      {idx + 1}
-                    </span>
-                    <h4 className="text-sm font-extrabold text-slate-900">{card.class_name}</h4>
-                  </div>
-
-                  {/* Status Badge */}
-                  {isDetected ? (
-                    <span className="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-red-100 text-red-800 border border-red-300 inline-flex items-center gap-1.5 shrink-0">
-                      <AlertOctagon className="w-3.5 h-3.5 text-red-600" />
-                      {card.status}
-                    </span>
-                  ) : isVerification ? (
-                    <span className="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-amber-100 text-amber-800 border border-amber-300 inline-flex items-center gap-1.5 shrink-0">
-                      <Search className="w-3.5 h-3.5 text-amber-600" />
-                      {card.status}
-                    </span>
-                  ) : (
-                    <span className="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 inline-flex items-center gap-1.5 shrink-0">
-                      <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                      {card.status}
-                    </span>
-                  )}
-                </div>
-
-                {/* Detected Details Pills */}
-                {isDetected && (
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    <span className="px-2 py-0.5 rounded-md bg-white border border-red-200 text-red-700 text-[10px] font-bold">
-                      Confidence: {card.confidence}%
-                    </span>
-                    <span className="px-2 py-0.5 rounded-md bg-white border border-red-200 text-red-700 text-[10px] font-bold">
-                      Count: {card.count} indication(s)
-                    </span>
-                    {card.location && (
-                      <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 text-[10px] font-bold">
-                        {card.location}
+                      <span className="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-red-100 text-red-800 border border-red-300 inline-flex items-center gap-1.5 shrink-0">
+                        <AlertOctagon className="w-3.5 h-3.5 text-red-600" />
+                        {card.status || 'DETECTED'}
                       </span>
-                    )}
-                    {card.severity && (
-                      <span className="px-2 py-0.5 rounded-md bg-orange-100 border border-orange-300 text-orange-800 text-[10px] font-extrabold">
-                        Severity: {card.severity}
+                    </div>
+
+                    {/* Detected Details Pills */}
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <span className="px-2 py-0.5 rounded-md bg-white border border-red-200 text-red-700 text-[10px] font-bold">
+                        Confidence: {card.confidence}%
                       </span>
-                    )}
+                      <span className="px-2 py-0.5 rounded-md bg-white border border-red-200 text-red-700 text-[10px] font-bold">
+                        Count: {card.count} indication(s)
+                      </span>
+                      {card.location && (
+                        <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 text-[10px] font-bold">
+                          {card.location}
+                        </span>
+                      )}
+                      {card.severity && (
+                        <span className="px-2 py-0.5 rounded-md bg-orange-100 border border-orange-300 text-orange-800 text-[10px] font-extrabold">
+                          Severity: {card.severity}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Observation / Details Text */}
+                    <div className="text-xs space-y-1.5 pt-1">
+                      {card.observation && (
+                        <p className="text-red-950 font-semibold bg-white/80 p-2 rounded-lg border border-red-100">
+                          <strong className="text-red-700 uppercase tracking-wider text-[10px] block">Observation:</strong>
+                          {card.observation}
+                        </p>
+                      )}
+
+                      {card.explanation && (
+                        <p className="text-slate-600 leading-relaxed font-medium">
+                          <strong className="text-slate-700 font-bold block text-[10px] uppercase tracking-wider">Explanation:</strong>
+                          {card.explanation}
+                        </p>
+                      )}
+
+                      {card.possible_causes && (
+                        <p className="text-slate-600 leading-relaxed">
+                          <strong className="text-orange-700 font-bold block text-[10px] uppercase tracking-wider">Possible Causes:</strong>
+                          {card.possible_causes}
+                        </p>
+                      )}
+
+                      {card.recommendation && (
+                        <p className="text-slate-600 leading-relaxed font-medium">
+                          <strong className="text-emerald-700 font-bold block text-[10px] uppercase tracking-wider">Recommendation:</strong>
+                          {card.recommendation}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Action button */}
+                    <div className="pt-2 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={scrollToImage}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-orange-700 bg-orange-100 hover:bg-orange-200 border border-orange-300 transition-colors cursor-pointer"
+                      >
+                        <Crosshair className="w-3.5 h-3.5" />
+                        View Detection on Image
+                      </button>
+                    </div>
                   </div>
-                )}
-
-                {/* Observation / Details Text */}
-                <div className="text-xs space-y-1.5 pt-1">
-                  {card.observation && (
-                    <p className="text-red-950 font-semibold bg-white/80 p-2 rounded-lg border border-red-100">
-                      <strong className="text-red-700 uppercase tracking-wider text-[10px] block">Observation:</strong>
-                      {card.observation}
-                    </p>
-                  )}
-
-                  <p className="text-slate-600 leading-relaxed font-medium">
-                    <strong className="text-slate-700 font-bold block text-[10px] uppercase tracking-wider">Explanation:</strong>
-                    {card.explanation}
-                  </p>
-
-                  {card.possible_causes && (
-                    <p className="text-slate-600 leading-relaxed">
-                      <strong className="text-orange-700 font-bold block text-[10px] uppercase tracking-wider">Possible Causes:</strong>
-                      {card.possible_causes}
-                    </p>
-                  )}
-
-                  <p className="text-slate-600 leading-relaxed font-medium">
-                    <strong className="text-emerald-700 font-bold block text-[10px] uppercase tracking-wider">Recommendation:</strong>
-                    {card.recommendation}
-                  </p>
-                </div>
-
-                {/* Action button for detected class */}
-                {isDetected && (
-                  <div className="pt-2 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={scrollToImage}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-orange-700 bg-orange-100 hover:bg-orange-200 border border-orange-300 transition-colors cursor-pointer"
-                    >
-                      <Crosshair className="w-3.5 h-3.5" />
-                      View Detection on Image
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </Card>
 
       {/* ── Quality Assessment Rationale ──────────────────────────────────── */}
