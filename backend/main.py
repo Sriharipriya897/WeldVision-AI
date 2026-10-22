@@ -1,5 +1,4 @@
 import os
-import sys
 import io
 import datetime
 from pathlib import Path
@@ -8,17 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
-# Ensure backend directory is in sys.path
-BACKEND_DIR = Path(__file__).resolve().parent
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
-
-try:
-    from detector import WeldDetector, CorrosionDetector
-    from pdf_generator import generate_pdf_report
-except ImportError:
-    from backend.detector import WeldDetector, CorrosionDetector
-    from backend.pdf_generator import generate_pdf_report
+from detector import WeldDetector, CorrosionDetector
+from pdf_generator import generate_pdf_report
 
 app = FastAPI(
     title="WeldVision AI Backend API",
@@ -35,8 +25,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize weld defect detector instance
-detector = WeldDetector()
+# Initialize Phase 2 weld defect detector instance
+MODEL_V2_PATH = r"C:\Users\user\OneDrive\Desktop\WeldVision-AI-main\WeldVision_Training_Experiment\models\weldvision_detect_v2.pt"
+detector = WeldDetector(model_path=MODEL_V2_PATH)
 
 
 # ─── API Routes ───────────────────────────────────────────────────────────────
@@ -45,9 +36,10 @@ detector = WeldDetector()
 def health_check():
     return {
         "status": "online",
-        "system": "WeldVision AI - Industrial Welding Inspection System",
-        "version": "2.0.0",
+        "system": "WeldVision AI - Industrial Welding Inspection System (Phase 2 Experimental)",
+        "version": "2.0.0-phase2-exp",
         "model_loaded": detector.model is not None,
+        "model_path": str(detector.model_path),
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
 
@@ -55,9 +47,10 @@ def health_check():
 @app.get("/api/model-info")
 def model_info():
     return {
-        "model_architecture": "Ultralytics YOLO11 Segmentation (YOLO11n-seg)",
+        "model_architecture": "Ultralytics YOLOv8n Detection (Phase 2 Experimental)",
         "weights_path": str(detector.model_path),
         "classes": list(detector.model.names.values()) if hasattr(detector.model, "names") else [],
+        "task": "detect",
         "device": detector.device,
         "status": "ready"
     }
@@ -70,7 +63,7 @@ async def inspect_image(file: UploadFile = File(...)):
     Analyzes weld defects (Crack, Porosity, Undercut, Overlap, Lack of Fusion, Lack of Penetration, Slag Inclusion, Burn Through, etc.).
     Returns engineering annotation with non-overlapping callout arrows, weld quality score, acceptance status, and defect breakdown.
     """
-    if file.content_type and not file.content_type.startswith("image/"):
+    if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image file (PNG, JPG, JPEG, WEBP).")
     
     try:
@@ -135,5 +128,5 @@ if os.path.exists(FRONTEND_DIST):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
 

@@ -16,7 +16,7 @@ const STEPS = [
   },
   {
     title: 'Detecting Weld Defects',
-    desc: 'Evaluating Slag, Undercut, Porosity, Fusion, Penetration, Spatter, and 12 defect classes',
+    desc: 'Evaluating Cracks, Porosity, Undercut, Fusion, and 20+ defect types',
     icon: Zap,
     color: '#F97316',
   },

@@ -17,9 +17,9 @@ export default function Header() {
   });
 
   const weldingDefects = [
-    'Slag Inclusion', 'Undercut', 'Porosity', 'Incomplete Fusion', 'Overlap', 'Underfill',
-    'Spatter', 'Excessive Convexity', 'Excessive Concavity', 'Excessive Weld Reinforcement',
-    'Incomplete Penetration', 'Excessive Penetration'
+    'Crack', 'Porosity', 'Undercut', 'Overlap', 'Lack of Fusion', 'Lack of Penetration',
+    'Slag Inclusion', 'Burn Through', 'Excess Reinforcement', 'Underfill', 'Spatter',
+    'Blow Hole', 'Misalignment', 'Surface Crack', 'Root Crack', 'Weld Bead Irregularity'
   ];
 
   return (

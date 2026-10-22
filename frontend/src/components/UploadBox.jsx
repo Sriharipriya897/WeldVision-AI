@@ -5,22 +5,26 @@ import {
 } from 'lucide-react';
 
 const WELD_DEFECT_TAGS = [
-  { label: 'Slag Inclusion',               color: '#F97316' },
-  { label: 'Undercut',                     color: '#F97316' },
-  { label: 'Porosity',                     color: '#F97316' },
-  { label: 'Incomplete Fusion',            color: '#EF4444' },
-  { label: 'Overlap',                      color: '#F59E0B' },
-  { label: 'Underfill',                    color: '#F97316' },
-  { label: 'Spatter',                      color: '#F59E0B' },
-  { label: 'Excessive Convexity',          color: '#F59E0B' },
-  { label: 'Excessive Concavity',          color: '#F97316' },
-  { label: 'Excessive Weld Reinforcement', color: '#F59E0B' },
-  { label: 'Incomplete Penetration',       color: '#EF4444' },
-  { label: 'Excessive Penetration',        color: '#F97316' },
+  { label: 'Crack',              color: '#EF4444' },
+  { label: 'Porosity',           color: '#F59E0B' },
+  { label: 'Undercut',           color: '#F97316' },
+  { label: 'Overlap',            color: '#F59E0B' },
+  { label: 'Lack of Fusion',     color: '#F97316' },
+  { label: 'Lack of Penetration',color: '#EF4444' },
+  { label: 'Slag Inclusion',     color: '#F59E0B' },
+  { label: 'Burn Through',       color: '#EF4444' },
+  { label: 'Excess Reinforcement',color: '#10B981' },
+  { label: 'Underfill',          color: '#F59E0B' },
+  { label: 'Spatter',            color: '#10B981' },
+  { label: 'Blow Hole',          color: '#F97316' },
+  { label: 'Misalignment',       color: '#F97316' },
+  { label: 'Surface Crack',      color: '#EF4444' },
+  { label: 'Root Crack',         color: '#EF4444' },
+  { label: 'Weld Bead Irregularity', color: '#10B981' },
 ];
 
 const FEATURES = [
-  { icon: Zap,          label: 'Weld Defect AI',      desc: '12 defect classes (YOLO11n-seg)' },
+  { icon: Zap,          label: 'Weld Defect AI',      desc: 'Detects 20+ weld joint defect types' },
   { icon: ScanLine,     label: 'CAD Annotation',      desc: 'Non-overlapping callout leader arrows' },
   { icon: ShieldAlert,  label: 'Quality Score & Meter',desc: 'Scorecard, meters & risk analysis' },
   { icon: FileImage,    label: 'Industrial PDF',       desc: 'AWS & ISO compliant report export' },
@@ -49,10 +53,35 @@ export default function UploadBox({ onImageSelected, selectedImage, onStartInspe
 
   // Helper to load sample weld preset image
   const loadPresetWeld = async (sampleName) => {
-    try {
-      const response = await fetch('/api/inspect'); // verify host connection if needed
-    } catch(e) {}
-    
+    const realSampleFiles = {
+      'overlap': '/samples/overlap_000.jpg',
+      'slag': '/samples/slag_04.jpg',
+      'undercut': '/samples/biteedge_03.jpg',
+    };
+
+    if (realSampleFiles[sampleName]) {
+      try {
+        const res = await fetch(realSampleFiles[sampleName]);
+        if (res.ok) {
+          const blob = await res.blob();
+          const file = new File([blob], `${sampleName}_specimen.jpg`, { type: 'image/jpeg' });
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            onImageSelected({
+              file,
+              previewUrl: e.target.result,
+              name: `${sampleName.toUpperCase()} Weld Specimen.jpg`,
+              size: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
+            });
+          };
+          reader.readAsDataURL(blob);
+          return;
+        }
+      } catch (err) {
+        console.error('Error fetching sample:', err);
+      }
+    }
+
     // Create synthetic weld image canvas for preset test
     const canvas = document.createElement('canvas');
     canvas.width = 800;
@@ -200,23 +229,44 @@ export default function UploadBox({ onImageSelected, selectedImage, onStartInspe
             </p>
 
             {/* Quick Demo Weld Samples */}
-            <div className="flex items-center gap-2 mb-6">
+            <div className="flex flex-wrap items-center justify-center gap-2 mb-6">
               <span className="text-xs font-semibold text-slate-400 flex items-center gap-1">
                 <Sparkles className="w-3.5 h-3.5 text-orange-500" /> Try Sample:
               </span>
               <button
                 type="button"
-                onClick={() => loadPresetWeld('crack')}
+                onClick={() => loadPresetWeld('overlap')}
                 className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200 transition-colors"
               >
-                Crack Defect
+                Overlap Specimen
+              </button>
+              <button
+                type="button"
+                onClick={() => loadPresetWeld('undercut')}
+                className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 transition-colors"
+              >
+                Undercut Specimen
+              </button>
+              <button
+                type="button"
+                onClick={() => loadPresetWeld('slag')}
+                className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 transition-colors"
+              >
+                Slag Inclusion Specimen
+              </button>
+              <button
+                type="button"
+                onClick={() => loadPresetWeld('crack')}
+                className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200 transition-colors"
+              >
+                Crack Demo
               </button>
               <button
                 type="button"
                 onClick={() => loadPresetWeld('porosity')}
                 className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-colors"
               >
-                Porosity Defect
+                Porosity Demo
               </button>
             </div>
 

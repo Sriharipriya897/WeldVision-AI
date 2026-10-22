@@ -29,33 +29,6 @@ run_localtunnel.cjs
 .env.local
 *.log
 
-# Root temporary package & dump files
+# Root temporary package files
 /package.json
 /package-lock.json
-*.html
-train_weldvision_12class.py
-yolo11n-seg.pt
-
-# ─── WeldVision Training & Dataset Gitignore ────────────────────────────────
-# Raw datasets and extracted copies — NOT tracked in Git
-dataset_12class/
-
-# Training run outputs — NOT tracked in Git
-training_runs/
-runs/
-
-# W&B experiment tracking
-wandb/
-
-# YOLO cache files
-*.cache
-
-# Jupyter checkpoints
-.ipynb_checkpoints/
-
-# ─── CRITICAL EXCEPTION: Final trained model IS tracked ─────────────────────
-# The production best.pt MUST remain in git so the backend can load it.
-# This negates the dataset_12class exclusion above (no effect needed since
-# backend/models is outside dataset_12class, but kept explicit for clarity).
-!backend/models/best.pt
-!backend/models/
